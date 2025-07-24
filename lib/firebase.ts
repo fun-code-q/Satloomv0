@@ -1,7 +1,7 @@
-import { initializeApp } from "firebase/app"
-import { getDatabase } from "firebase/database"
-import { getStorage } from "firebase/storage"
-import { getAuth } from "firebase/auth"
+import { initializeApp } from "firebase/app";
+import { getDatabase } from "firebase/database";
+import { getStorage } from "firebase/storage";
+import { getAuth, signInAnonymously } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -11,29 +11,37 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-}
+};
 
-let app
-let database
-let storage
-let auth
+let app;
+let database;
+let storage;
+let auth;
 
 try {
-  app = initializeApp(firebaseConfig)
-  database = getDatabase(app)
-  storage = getStorage(app)
-  auth = getAuth(app)
+  app = initializeApp(firebaseConfig);
+  database = getDatabase(app);
+  storage = getStorage(app);
+  auth = getAuth(app);
 
-  console.log("Firebase initialized successfully")
-  console.log("Database URL:", firebaseConfig.databaseURL)
+  // ✅ Sign in anonymously
+  signInAnonymously(auth)
+    .then(() => {
+      console.log("Signed in anonymously");
+    })
+    .catch((error) => {
+      console.error("Anonymous auth failed:", error);
+    });
+
+  console.log("Firebase initialized successfully");
+  console.log("Database URL:", firebaseConfig.databaseURL);
 } catch (error) {
-  console.error("Firebase initialization error:", error)
-  // Fallback for development
-  app = null
-  database = null
-  storage = null
-  auth = null
+  console.error("Firebase initialization error:", error);
+  app = null;
+  database = null;
+  storage = null;
+  auth = null;
 }
 
-export { database, storage, auth }
-export default app
+export { database, storage, auth };
+export default app;
