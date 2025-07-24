@@ -1,0 +1,63 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+    "rooms": {
+      "$roomId": {
+        ".read": true,
+        ".write": true,
+        ".validate": "newData.hasChildren(['createdAt'])",
+        "messages": {
+          "$messageId": {
+            ".read": true,
+            ".write": true
+          }
+        },
+        "members": {
+          "$userId": {
+            ".read": true,
+            ".write": true
+          }
+        },
+        "presence": {
+          "$userId": {
+            ".read": true,
+            ".write": true
+          }
+        },
+        "theater": {
+          "$sessionId": {
+            ".read": true,
+            ".write": true
+          }
+        },
+        "theater_invites": {
+          "$inviteId": {
+            ".read": true,
+            ".write": true
+          }
+        }
+      }
+    },
+    "calls": {
+      "$roomId": {
+        ".read": true,
+        ".write": true,
+        "$callId": {
+          ".read": true,
+          ".write": true
+        }
+      }
+    },
+    "games": {
+      "$roomId": {
+        ".read": true,
+        ".write": true,
+        "$gameId": {
+          ".read": true,
+          ".write": true
+        }
+      }
+    }
+  }
+}
