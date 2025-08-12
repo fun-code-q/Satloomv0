@@ -1,152 +1,149 @@
 "use client"
 
+import type React from "react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Film, Play, Youtube, Video } from "lucide-react"
+import { Label } from "@/components/ui/label"
+import { X, Film, Youtube, Music, Video } from "lucide-react"
 
 interface TheaterSetupModalProps {
   isOpen: boolean
   onClose: () => void
-  onCreateSession: (videoUrl: string, videoType: "direct" | "youtube" | "vimeo") => void
+  onCreateSession: (videoUrl: string, videoType: "direct" | "youtube" | "vimeo" | "soundcloud") => void
 }
 
 export function TheaterSetupModal({ isOpen, onClose, onCreateSession }: TheaterSetupModalProps) {
   const [videoUrl, setVideoUrl] = useState("")
-  const [selectedType, setSelectedType] = useState<"direct" | "youtube" | "vimeo">("direct")
   const [isLoading, setIsLoading] = useState(false)
 
-  const videoTypes = [
-    {
-      id: "direct" as const,
-      label: "Direct Video",
-      icon: Video,
-      description: "MP4, WebM files",
-    },
-    {
-      id: "youtube" as const,
-      label: "YouTube",
-      icon: Youtube,
-      description: "YouTube videos",
-    },
-    {
-      id: "vimeo" as const,
-      label: "Vimeo",
-      icon: Play,
-      description: "Vimeo videos",
-    },
-  ]
+  if (!isOpen) return null
 
-  const handleLoadVideo = async () => {
-    if (!videoUrl.trim()) return
+  // Auto-detect platform from URL
+  const detectPlatform = (url: string): "direct" | "youtube" | "vimeo" | "soundcloud" => {
+    if (url.match(/(youtube\.com|youtu\.be)/)) return "youtube"
+    if (url.match(/vimeo\.com/)) return "vimeo"
+    if (url.match(/soundcloud\.com/)) return "soundcloud"
+    return "direct"
+  }
+
+  const validateUrl = (url: string): boolean => {
+    if (!url.trim()) return false
+
+    try {
+      new URL(url)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const handleCreateSession = async () => {
+    if (!validateUrl(videoUrl)) {
+      alert("Please enter a valid URL")
+      return
+    }
 
     setIsLoading(true)
     try {
-      // Validate URL based on type
-      let processedUrl = videoUrl.trim()
-
-      if (selectedType === "youtube") {
-        // Convert YouTube URL to embed format
-        const youtubeRegex = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/
-        const match = processedUrl.match(youtubeRegex)
-        if (match) {
-          processedUrl = `https://www.youtube.com/embed/${match[1]}?enablejsapi=1&origin=${window.location.origin}`
-        }
-      } else if (selectedType === "vimeo") {
-        // Convert Vimeo URL to embed format
-        const vimeoRegex = /vimeo\.com\/(\d+)/
-        const match = processedUrl.match(vimeoRegex)
-        if (match) {
-          processedUrl = `https://player.vimeo.com/video/${match[1]}?api=1`
-        }
-      }
-
-      onCreateSession(processedUrl, selectedType)
-      onClose()
+      const platform = detectPlatform(videoUrl)
+      await onCreateSession(videoUrl, platform)
       setVideoUrl("")
+      onClose()
     } catch (error) {
-      console.error("Error loading video:", error)
-      alert("Error loading video. Please check the URL and try again.")
+      console.error("Error creating theater session:", error)
+      alert("Failed to create theater session")
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleClose = () => {
-    setVideoUrl("")
-    setSelectedType("direct")
-    onClose()
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault()
+      handleCreateSession()
+    }
   }
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-md">
-        <DialogHeader>
-          <DialogTitle className="text-center text-cyan-400 flex items-center justify-center gap-2">
-            <Film className="w-5 h-5" />
-            Select a Video
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-6 py-4">
-          {/* Video Type Selection */}
-          <div className="flex gap-2">
-            {videoTypes.map((type) => (
-              <Button
-                key={type.id}
-                variant={selectedType === type.id ? "default" : "outline"}
-                className={`flex-1 h-auto p-3 flex flex-col gap-1 ${
-                  selectedType === type.id
-                    ? "bg-cyan-500 hover:bg-cyan-600"
-                    : "border-slate-600 hover:bg-slate-700 bg-transparent"
-                }`}
-                onClick={() => setSelectedType(type.id)}
-              >
-                <type.icon className="w-4 h-4" />
-                <span className="text-xs font-medium">{type.label}</span>
-              </Button>
-            ))}
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 max-w-md w-full">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-purple-500/20 rounded-full flex items-center justify-center">
+              <Film className="w-5 h-5 text-purple-400" />
+            </div>
+            <h2 className="text-xl font-bold text-white">Movie Theater</h2>
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="text-gray-400 hover:text-white hover:bg-slate-700"
+          >
+            <X className="w-5 h-5" />
+          </Button>
+        </div>
 
-          {/* URL Input */}
-          <div className="space-y-2">
+        <div className="space-y-4">
+          <div>
+            <Label htmlFor="video-url" className="text-white mb-2 block">
+              Video URL
+            </Label>
             <Input
+              id="video-url"
+              type="url"
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
-              placeholder={
-                selectedType === "direct"
-                  ? "Paste direct video URL (MP4, WebM)"
-                  : selectedType === "youtube"
-                    ? "Paste YouTube URL"
-                    : "Paste Vimeo URL"
-              }
+              onKeyPress={handleKeyPress}
+              placeholder="Paste video URL here..."
               className="bg-slate-700 border-slate-600 text-white placeholder-gray-400"
+              disabled={isLoading}
             />
-
-            <p className="text-xs text-gray-400">Note: Video must be served with proper CORS headers</p>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex gap-4 justify-center pt-4">
+          {/* Supported Platforms Footer */}
+          <div className="bg-slate-700/50 rounded-lg p-3">
+            <p className="text-xs text-gray-400 mb-2">Supported platforms:</p>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-1">
+                <Youtube className="w-4 h-4 text-red-500" />
+                <span className="text-xs text-gray-300">YouTube</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Video className="w-4 h-4 text-blue-500" />
+                <span className="text-xs text-gray-300">Vimeo</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Music className="w-4 h-4 text-orange-500" />
+                <span className="text-xs text-gray-300">SoundCloud</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Film className="w-4 h-4 text-green-500" />
+                <span className="text-xs text-gray-300">Direct Media</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-4">
             <Button
-              onClick={handleLoadVideo}
-              disabled={!videoUrl.trim() || isLoading}
-              className="bg-cyan-500 hover:bg-cyan-600 px-8"
-            >
-              <Film className="w-4 h-4 mr-2" />
-              {isLoading ? "Loading..." : "Load Video"}
-            </Button>
-            <Button
-              onClick={handleClose}
+              onClick={onClose}
               variant="outline"
-              className="border-slate-600 text-white hover:bg-slate-700 bg-transparent px-8"
+              className="flex-1 border-slate-600 text-white hover:bg-slate-700 bg-transparent"
+              disabled={isLoading}
             >
               Cancel
             </Button>
+            <Button
+              onClick={handleCreateSession}
+              className="flex-1 bg-purple-500 hover:bg-purple-600 text-white"
+              disabled={!validateUrl(videoUrl) || isLoading}
+            >
+              {isLoading ? "Creating..." : "Start Theater"}
+            </Button>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   )
 }

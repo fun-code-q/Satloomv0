@@ -1,34 +1,35 @@
 import { database } from "@/lib/firebase"
-import { ref, set, onValue, remove } from "firebase/database"
+import { ref, push, set, onValue, off, update, remove } from "firebase/database"
 
 export interface TheaterSession {
   id: string
   roomId: string
   hostId: string
-  hostName: string
+  host: string
   videoUrl: string
-  videoType: "direct" | "youtube" | "vimeo"
-  status: "waiting" | "loading" | "playing" | "paused" | "ended"
-  participants: string[]
+  platform: "youtube" | "vimeo" | "direct" | "soundcloud"
+  status: "waiting" | "playing" | "paused" | "ended"
   currentTime: number
-  lastAction?: TheaterAction
+  participants: string[]
   createdAt: number
-}
-
-export interface TheaterAction {
-  type: "play" | "pause" | "seek"
-  currentTime?: number
-  timestamp: number
-  hostId: string
-  hostName: string
+  lastAction?: {
+    type: "play" | "pause" | "seek" | "raise_hand" | "update_queue"
+    currentTime: number
+    hostId: string
+    host: string
+    timestamp: number
+    nextVideos?: string[]
+  }
+  nextVideos?: string[]
+  raiseHands?: number
 }
 
 export interface TheaterInvite {
   id: string
   sessionId: string
   roomId: string
-  host: string
   hostId: string
+  host: string
   videoTitle: string
   timestamp: number
 }
@@ -36,7 +37,6 @@ export interface TheaterInvite {
 export class TheaterSignaling {
   private static instance: TheaterSignaling
   private currentSession: TheaterSession | null = null
-  private theaterListeners: Array<() => void> = []
 
   static getInstance(): TheaterSignaling {
     if (!TheaterSignaling.instance) {
@@ -45,199 +45,324 @@ export class TheaterSignaling {
     return TheaterSignaling.instance
   }
 
-  // Create a new theater session
+  private cleanData(obj: any): any {
+    if (obj === null || obj === undefined) {
+      return null
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map((item) => this.cleanData(item)).filter((item) => item !== undefined)
+    }
+
+    if (typeof obj === "object") {
+      const cleaned: any = {}
+      for (const [key, value] of Object.entries(obj)) {
+        const cleanedValue = this.cleanData(value)
+        if (cleanedValue !== undefined) {
+          cleaned[key] = cleanedValue
+        }
+      }
+      return cleaned
+    }
+
+    return obj
+  }
+
+  private getSnapshot(ref: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      let unsubscribe: (() => void) | null = null
+
+      unsubscribe = onValue(
+        ref,
+        (snapshot) => {
+          if (unsubscribe) {
+            unsubscribe()
+          }
+          resolve(snapshot)
+        },
+        (error) => {
+          if (unsubscribe) {
+            unsubscribe()
+          }
+          reject(error)
+        },
+      )
+    })
+  }
+
   async createSession(
     roomId: string,
-    hostName: string,
+    host: string,
     hostId: string,
     videoUrl: string,
-    videoType: "direct" | "youtube" | "vimeo",
+    platform: "youtube" | "vimeo" | "direct" | "soundcloud",
   ): Promise<string> {
     if (!database) {
       throw new Error("Firebase database not initialized")
     }
 
-    const sessionId = `theater_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    const sessionRef = push(ref(database, `rooms/${roomId}/theater`))
+    const sessionId = sessionRef.key!
 
-    const session: TheaterSession = {
-      id: sessionId,
+    const session: Omit<TheaterSession, "id"> = {
       roomId,
       hostId,
-      hostName,
+      host,
       videoUrl,
-      videoType,
+      platform,
       status: "waiting",
-      participants: [hostId],
       currentTime: 0,
+      participants: [hostId],
       createdAt: Date.now(),
+      nextVideos: [],
+      raiseHands: 0,
     }
 
-    const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
-    await set(sessionRef, session)
+    const cleanedSession = this.cleanData(session)
+    await set(sessionRef, cleanedSession)
 
-    this.currentSession = session
+    this.currentSession = { id: sessionId, ...session }
     return sessionId
   }
 
-  // Send invite to all room members
-  async sendInvite(roomId: string, sessionId: string, hostName: string, hostId: string, videoTitle: string) {
-    if (!database) return
-
-    const invite: TheaterInvite = {
-      id: `invite_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      sessionId,
-      roomId,
-      host: hostName,
-      hostId,
-      videoTitle,
-      timestamp: Date.now(),
+  async joinSession(roomId: string, sessionId: string, userId: string): Promise<void> {
+    if (!database) {
+      throw new Error("Firebase database not initialized")
     }
-
-    const inviteRef = ref(database, `rooms/${roomId}/theaterInvites/${invite.id}`)
-    await set(inviteRef, invite)
-
-    // Auto-remove invite after 30 seconds
-    setTimeout(async () => {
-      try {
-        await remove(inviteRef)
-      } catch (error) {
-        console.error("Error removing theater invite:", error)
-      }
-    }, 30000)
-  }
-
-  // Join theater session
-  async joinSession(roomId: string, sessionId: string, userId: string) {
-    if (!database) return
 
     const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
 
-    // Get current session data
-    const snapshot = await new Promise<any>((resolve) => {
-      onValue(sessionRef, resolve, { onlyOnce: true })
-    })
+    try {
+      const snapshot = await this.getSnapshot(sessionRef)
+      const session = snapshot.val()
 
-    const session = snapshot.val()
-    if (session && !session.participants.includes(userId)) {
-      const updatedParticipants = [...session.participants, userId]
-      await set(ref(database, `rooms/${roomId}/theater/${sessionId}/participants`), updatedParticipants)
+      if (!session) {
+        throw new Error("Session not found")
+      }
+
+      const updatedParticipants = [...(session.participants || []), userId]
+      await update(sessionRef, { participants: updatedParticipants })
+    } catch (error) {
+      console.error("Error joining session:", error)
+      throw error
     }
   }
 
-  // Send theater action (play, pause, seek)
-  async sendAction(
-    roomId: string,
-    sessionId: string,
-    type: "play" | "pause" | "seek",
-    currentTime: number,
-    hostId: string,
-    hostName: string,
-  ) {
-    if (!database) return
-
-    const action: TheaterAction = {
-      type,
-      currentTime,
-      timestamp: Date.now(),
-      hostId,
-      hostName,
+  async leaveSession(roomId: string, sessionId: string, userId: string): Promise<void> {
+    if (!database) {
+      throw new Error("Firebase database not initialized")
     }
 
-    const actionRef = ref(database, `rooms/${roomId}/theater/${sessionId}/lastAction`)
-    await set(actionRef, action)
+    const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
 
-    // Update session status
-    const statusRef = ref(database, `rooms/${roomId}/theater/${sessionId}/status`)
-    await set(statusRef, type === "play" ? "playing" : "paused")
+    try {
+      const snapshot = await this.getSnapshot(sessionRef)
+      const session = snapshot.val()
 
-    // Update current time
-    const timeRef = ref(database, `rooms/${roomId}/theater/${sessionId}/currentTime`)
-    await set(timeRef, currentTime)
+      if (!session) return
+
+      const updatedParticipants = (session.participants || []).filter((id: string) => id !== userId)
+
+      if (updatedParticipants.length === 0) {
+        // No participants left, end session
+        await this.endSession(roomId, sessionId)
+      } else {
+        await update(sessionRef, { participants: updatedParticipants })
+      }
+    } catch (error) {
+      console.error("Error leaving session:", error)
+      throw error
+    }
   }
 
-  // End theater session
-  async endSession(roomId: string, sessionId: string) {
-    if (!database) return
+  async endSession(roomId: string, sessionId: string): Promise<void> {
+    if (!database) {
+      throw new Error("Firebase database not initialized")
+    }
 
-    // Update session status to ended
-    const statusRef = ref(database, `rooms/${roomId}/theater/${sessionId}/status`)
-    await set(statusRef, "ended")
+    const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
+    await update(sessionRef, { status: "ended" })
 
-    // Clean up after 5 seconds
+    // Clean up after a delay
     setTimeout(async () => {
       try {
-        const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
         await remove(sessionRef)
       } catch (error) {
-        console.error("Error removing theater session:", error)
+        console.error("Error removing session:", error)
       }
     }, 5000)
 
     this.currentSession = null
   }
 
-  // Listen for theater session updates
-  listenForSession(roomId: string, sessionId: string, onUpdate: (session: TheaterSession) => void) {
+  async sendAction(
+    roomId: string,
+    sessionId: string,
+    type: "play" | "pause" | "seek" | "raise_hand" | "update_queue",
+    currentTime: number,
+    hostId: string,
+    host: string,
+    nextVideos?: string[],
+  ): Promise<void> {
     if (!database) {
-      console.warn("Firebase database not initialized, theater listening disabled")
-      return () => {}
+      throw new Error("Firebase database not initialized")
+    }
+
+    const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
+
+    const actionData: any = {
+      lastAction: {
+        type,
+        currentTime,
+        hostId,
+        host,
+        timestamp: Date.now(),
+      },
+      currentTime,
+    }
+
+    // Handle specific action types
+    if (type === "play") {
+      actionData.status = "playing"
+    } else if (type === "pause") {
+      actionData.status = "paused"
+    } else if (type === "raise_hand") {
+      try {
+        const snapshot = await this.getSnapshot(sessionRef)
+        const session = snapshot.val()
+        const currentRaiseHands = session?.raiseHands || 0
+        actionData.raiseHands = currentRaiseHands + 1
+      } catch (error) {
+        console.error("Error updating raise hands:", error)
+        actionData.raiseHands = 1
+      }
+    } else if (type === "update_queue" && nextVideos) {
+      actionData.nextVideos = nextVideos
+      actionData.lastAction.nextVideos = nextVideos
+    }
+
+    const cleanedData = this.cleanData(actionData)
+    await update(sessionRef, cleanedData)
+  }
+
+  async sendInvite(roomId: string, sessionId: string, host: string, hostId: string, videoTitle: string): Promise<void> {
+    if (!database) {
+      throw new Error("Firebase database not initialized")
+    }
+
+    const inviteRef = push(ref(database, `rooms/${roomId}/theater_invites`))
+    const inviteId = inviteRef.key!
+
+    const invite: Omit<TheaterInvite, "id"> = {
+      sessionId,
+      roomId,
+      hostId,
+      host,
+      videoTitle,
+      timestamp: Date.now(),
+    }
+
+    const cleanedInvite = this.cleanData(invite)
+    await set(inviteRef, cleanedInvite)
+
+    // Auto-remove invite after 5 minutes
+    setTimeout(async () => {
+      try {
+        await remove(inviteRef)
+      } catch (error) {
+        console.error("Error removing invite:", error)
+      }
+    }, 300000)
+  }
+
+  listenForSession(roomId: string, sessionId: string, callback: (session: TheaterSession) => void): () => void {
+    if (!database) {
+      throw new Error("Firebase database not initialized")
     }
 
     const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
 
     const unsubscribe = onValue(sessionRef, (snapshot) => {
-      const session = snapshot.val()
-      if (session) {
-        this.currentSession = session
-        onUpdate(session)
-
-        // If session ended, notify all participants
-        if (session.status === "ended") {
-          setTimeout(() => {
-            onUpdate({ ...session, status: "ended" })
-          }, 1000)
+      const sessionData = snapshot.val()
+      if (sessionData) {
+        const session: TheaterSession = {
+          id: sessionId,
+          ...sessionData,
         }
+        this.currentSession = session
+        callback(session)
       }
     })
 
-    this.theaterListeners.push(unsubscribe)
-    return unsubscribe
+    return () => {
+      off(sessionRef)
+      unsubscribe()
+    }
   }
 
-  // Listen for theater invites
-  listenForInvites(roomId: string, userId: string, onInvite: (invite: TheaterInvite) => void) {
+  listenForInvites(roomId: string, userId: string, callback: (invite: TheaterInvite) => void): () => void {
     if (!database) {
-      console.warn("Firebase database not initialized, theater invite listening disabled")
-      return () => {}
+      throw new Error("Firebase database not initialized")
     }
 
-    const invitesRef = ref(database, `rooms/${roomId}/theaterInvites`)
+    const invitesRef = ref(database, `rooms/${roomId}/theater_invites`)
 
     const unsubscribe = onValue(invitesRef, (snapshot) => {
       const invites = snapshot.val()
       if (invites) {
-        Object.values(invites).forEach((invite: any) => {
-          // Only show invites from other users
-          if (invite.hostId !== userId) {
-            onInvite(invite)
+        Object.entries(invites).forEach(([inviteId, inviteData]: [string, any]) => {
+          if (inviteData.hostId !== userId && inviteData.timestamp > Date.now() - 300000) {
+            const invite: TheaterInvite = {
+              id: inviteId,
+              ...inviteData,
+            }
+            callback(invite)
           }
         })
       }
     })
 
-    this.theaterListeners.push(unsubscribe)
-    return unsubscribe
+    return () => {
+      off(invitesRef)
+      unsubscribe()
+    }
   }
 
-  // Get current session
+  async getActiveSession(roomId: string): Promise<TheaterSession | null> {
+    if (!database) {
+      throw new Error("Firebase database not initialized")
+    }
+
+    const theaterRef = ref(database, `rooms/${roomId}/theater`)
+
+    try {
+      const snapshot = await this.getSnapshot(theaterRef)
+      const sessions = snapshot.val()
+
+      if (!sessions) return null
+
+      // Find active session
+      for (const [sessionId, sessionData] of Object.entries(sessions) as [string, any][]) {
+        if (sessionData.status === "playing" || sessionData.status === "paused" || sessionData.status === "waiting") {
+          return {
+            id: sessionId,
+            ...sessionData,
+          }
+        }
+      }
+
+      return null
+    } catch (error) {
+      console.error("Error getting active session:", error)
+      return null
+    }
+  }
+
   getCurrentSession(): TheaterSession | null {
     return this.currentSession
   }
 
-  // Clean up listeners
-  cleanup() {
-    this.theaterListeners.forEach((unsubscribe) => unsubscribe())
-    this.theaterListeners = []
+  cleanup(): void {
     this.currentSession = null
   }
 }
