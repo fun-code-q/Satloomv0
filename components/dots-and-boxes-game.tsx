@@ -31,6 +31,8 @@ export function DotsAndBoxesGameComponent({
   const [isPaused, setIsPaused] = useState(false)
   const [showPauseMenu, setShowPauseMenu] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
+  const [isHost, setIsHost] = useState(false)
+  const [isMultiplayer, setIsMultiplayer] = useState(false)
 
   // Dot selection state
   const [selectedDot, setSelectedDot] = useState<{ row: number; col: number } | null>(null)
@@ -46,12 +48,15 @@ export function DotsAndBoxesGameComponent({
   const localStreamRef = useRef<MediaStream | null>(null)
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
   const gameListenerRef = useRef<(() => void) | null>(null)
+  const localGameRef = useRef<DotsAndBoxesGame | null>(null)
 
   const gameSignaling = GameSignaling.getInstance()
   const gameSounds = GameSounds.getInstance()
   const notificationSystem = NotificationSystem.getInstance()
 
-  const gameId = useRef(`game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`).current
+  const gameId = useRef(
+    gameConfig.sharedGameId || `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+  ).current
 
   // Constants - Fixed canvas size
   const CANVAS_SIZE = 400
@@ -63,103 +68,20 @@ export function DotsAndBoxesGameComponent({
   // Initialize game
   useEffect(() => {
     console.log("🎮 Initializing game with config:", gameConfig)
+    initializeGame()
 
+    return () => {
+      cleanup()
+    }
+  }, [gameConfig, roomId, currentUserId])
+
+  const initializeGame = async () => {
     if (gameConfig.mode === "single") {
-      // Single player mode - keep existing logic
-      const players: Player[] = [
-        {
-          id: currentUserId,
-          name: gameConfig.players[0]?.name || "You",
-          color: "#3b82f6", // Blue
-          isComputer: false,
-          isHost: true,
-          initials: (gameConfig.players[0]?.name || "You").substring(0, 2).toUpperCase(),
-        },
-        {
-          id: "computer",
-          name: "AI",
-          color: "#1e40af", // Darker blue
-          isComputer: true,
-          isHost: false,
-          initials: "AI",
-        },
-      ]
-
-      const newGame = new DotsAndBoxesGame(gameId, roomId, players, gameConfig.gridSize, gameConfig.voiceChatEnabled)
-      setGame(newGame)
-      newGame.startGame()
-      setGameState(newGame.getGameState())
+      // Single player mode
+      initializeSinglePlayerGame()
     } else {
-      // Multiplayer mode - create players based on config
-      const players: Player[] = gameConfig.players.map((player, index) => {
-        if (index === 0) {
-          // Host player
-          return {
-            id: currentUserId,
-            name: player.name,
-            color: player.color,
-            isComputer: false,
-            isHost: true,
-            initials: player.name.substring(0, 2).toUpperCase(),
-            connected: true,
-          }
-        } else if (player.isAI) {
-          // AI player
-          return {
-            id: `ai_${index}`,
-            name: player.name,
-            color: player.color,
-            isComputer: true,
-            isHost: false,
-            initials: player.name.substring(0, 2).toUpperCase(),
-            connected: true,
-          }
-        } else {
-          // Human player slot - create as placeholder
-          return {
-            id: `placeholder_${index}`,
-            name: `Waiting for Player ${index + 1}`,
-            color: player.color,
-            isComputer: false,
-            isHost: false,
-            initials: "??",
-            isPlaceholder: true,
-            connected: false,
-          }
-        }
-      })
-
-      console.log("👥 Multiplayer players with placeholders:", players)
-
-      const newGame = new DotsAndBoxesGame(gameId, roomId, players, gameConfig.gridSize, gameConfig.voiceChatEnabled)
-      setGame(newGame)
-      newGame.startGame()
-      setGameState(newGame.getGameState())
-
-      // If there's a sharedGameId, this means we need to sync with Firebase
-      if (gameConfig.sharedGameId) {
-        // Create or join the shared game
-        gameSignaling.createGame(roomId, newGame.getGameState()).catch(console.error)
-
-        // Listen for game updates
-        const unsubscribe = gameSignaling.listenForGame(roomId, gameId, (updatedState) => {
-          console.log("📡 Received game state update from Firebase")
-          setGameState(updatedState)
-
-          // Update local game instance
-          if (game) {
-            // Sync the game state
-            Object.assign(game.getGameState(), updatedState)
-          }
-        })
-
-        gameListenerRef.current = unsubscribe
-
-        return () => {
-          unsubscribe()
-          cleanup()
-        }
-      }
+      // Multiplayer mode
+      await initializeMultiplayerGame()
     }
 
     if (gameConfig.voiceChatEnabled) {
@@ -168,57 +90,229 @@ export function DotsAndBoxesGameComponent({
 
     startGameTimer()
     gameSounds.playGameStart()
+  }
 
-    return () => {
-      cleanup()
+  const initializeSinglePlayerGame = () => {
+    console.log("🎮 Initializing single player game")
+
+    const players: Player[] = [
+      {
+        id: currentUserId,
+        name: gameConfig.players[0]?.name || "You",
+        color: "#3b82f6",
+        isComputer: false,
+        isHost: true,
+        initials: (gameConfig.players[0]?.name || "You").substring(0, 2).toUpperCase(),
+        connected: true,
+      },
+      {
+        id: "computer",
+        name: "AI",
+        color: "#1e40af",
+        isComputer: true,
+        isHost: false,
+        initials: "AI",
+        connected: true,
+      },
+    ]
+
+    const newGame = new DotsAndBoxesGame(gameId, roomId, players, gameConfig.gridSize, gameConfig.voiceChatEnabled)
+    setGame(newGame)
+    localGameRef.current = newGame
+    newGame.startGame()
+    setGameState(newGame.getGameState())
+    setIsHost(true)
+    setIsMultiplayer(false)
+  }
+
+  const initializeMultiplayerGame = async () => {
+    console.log("🎮 Initializing multiplayer game")
+    setIsMultiplayer(true)
+
+    // Check if we're the host (first player) or joining
+    const isGameHost = gameConfig.players[0]?.id === currentUserId || !gameConfig.sharedGameId
+    setIsHost(isGameHost)
+
+    if (isGameHost) {
+      // Host creates the game
+      await createMultiplayerGame()
+    } else {
+      // Player joins existing game
+      await joinMultiplayerGame()
     }
-  }, [gameConfig, roomId, currentUserId])
+  }
 
-  const handlePlayerJoin = useCallback(
-    async (playerId: string, playerName: string) => {
-      if (!game || !gameState) return false
+  const createMultiplayerGame = async () => {
+    console.log("👑 Creating multiplayer game as host")
 
-      // Find the first available placeholder slot
-      const availableSlotIndex = gameState.players.findIndex((player) => player.isPlaceholder && !player.isComputer)
-
-      if (availableSlotIndex === -1) {
-        console.log("❌ No available slots for new player")
-        return false
+    const players: Player[] = gameConfig.players.map((player, index) => {
+      if (index === 0) {
+        // Host player
+        return {
+          id: currentUserId,
+          name: player.name,
+          color: player.color,
+          isComputer: false,
+          isHost: true,
+          initials: player.name.substring(0, 2).toUpperCase(),
+          connected: true,
+        }
+      } else if (player.isAI) {
+        // AI player
+        return {
+          id: `ai_${index}`,
+          name: player.name,
+          color: player.color,
+          isComputer: true,
+          isHost: false,
+          initials: player.name.substring(0, 2).toUpperCase(),
+          connected: true,
+        }
+      } else {
+        // Human player slot - create as placeholder
+        return {
+          id: `placeholder_${index}`,
+          name: `Waiting for Player ${index + 1}`,
+          color: player.color,
+          isComputer: false,
+          isHost: false,
+          initials: "??",
+          isPlaceholder: true,
+          connected: false,
+        }
       }
+    })
 
-      const success = game.joinPlayer(availableSlotIndex, playerId, playerName)
+    const newGame = new DotsAndBoxesGame(gameId, roomId, players, gameConfig.gridSize, gameConfig.voiceChatEnabled)
+    setGame(newGame)
+    localGameRef.current = newGame
+    newGame.startGame()
+
+    const initialState = newGame.getGameState()
+    setGameState(initialState)
+
+    // Create game in Firebase
+    try {
+      await gameSignaling.createMultiplayerGame(roomId, gameId, initialState)
+      console.log("✅ Multiplayer game created in Firebase")
+    } catch (error) {
+      console.error("❌ Failed to create multiplayer game:", error)
+      notificationSystem.error("Failed to create multiplayer game")
+    }
+
+    // Start listening for updates
+    setupMultiplayerListener()
+  }
+
+  const joinMultiplayerGame = async () => {
+    console.log("🤝 Joining multiplayer game")
+
+    try {
+      // Try to join the game
+      const success = await gameSignaling.joinMultiplayerGame(
+        roomId,
+        gameId,
+        currentUserId,
+        gameConfig.players[0]?.name || "Player",
+      )
+
       if (success) {
-        const updatedState = game.getGameState()
-        setGameState(updatedState)
+        console.log("✅ Successfully joined multiplayer game")
 
-        // Update Firebase if this is a shared game
-        if (gameConfig.sharedGameId) {
-          await gameSignaling.updateGame(roomId, updatedState)
+        // Get the updated game state
+        const gameState = await gameSignaling.getMultiplayerGameState(roomId, gameId)
+        if (gameState) {
+          // Create local game instance with the current state
+          const newGame = new DotsAndBoxesGame(
+            gameId,
+            roomId,
+            gameState.players,
+            gameConfig.gridSize,
+            gameConfig.voiceChatEnabled,
+          )
+
+          // Sync the game state
+          Object.assign(newGame.getGameState(), gameState)
+
+          setGame(newGame)
+          localGameRef.current = newGame
+          setGameState(gameState)
+
+          console.log("🎮 Local game instance created and synced")
         }
 
-        console.log(`✅ ${playerName} joined the game`)
-        notificationSystem.success(`${playerName} joined the game!`)
-        return true
+        // Start listening for updates
+        setupMultiplayerListener()
+      } else {
+        console.log("❌ Failed to join multiplayer game")
+        notificationSystem.error("Failed to join game - no available slots")
+      }
+    } catch (error) {
+      console.error("❌ Error joining multiplayer game:", error)
+      notificationSystem.error("Failed to join multiplayer game")
+    }
+  }
+
+  const setupMultiplayerListener = () => {
+    console.log("🔗 Setting up multiplayer game listener")
+
+    const unsubscribe = gameSignaling.listenForMultiplayerGame(roomId, gameId, (updatedState) => {
+      console.log("📡 Received multiplayer game state update:", {
+        currentPlayerIndex: updatedState.currentPlayerIndex,
+        gameStatus: updatedState.gameStatus,
+        lastMove: updatedState.lastMove,
+        playersCount: updatedState.players?.length,
+        activePlayerIds: updatedState.activePlayerIds,
+      })
+
+      // Update local game state
+      setGameState(updatedState)
+
+      // Sync local game instance if it exists
+      if (localGameRef.current) {
+        try {
+          // Update the local game instance with the new state
+          const localGame = localGameRef.current
+          const localState = localGame.getGameState()
+
+          // Sync critical game state properties
+          Object.assign(localState, {
+            players: updatedState.players,
+            currentPlayerIndex: updatedState.currentPlayerIndex,
+            horizontalLines: updatedState.horizontalLines,
+            verticalLines: updatedState.verticalLines,
+            boxes: updatedState.boxes,
+            scores: updatedState.scores,
+            gameStatus: updatedState.gameStatus,
+            winner: updatedState.winner,
+            lastMove: updatedState.lastMove,
+          })
+
+          console.log("🔄 Local game instance synced with Firebase state")
+        } catch (error) {
+          console.error("❌ Error syncing local game instance:", error)
+        }
       }
 
-      return false
-    },
-    [game, gameState, gameConfig.sharedGameId, roomId],
-  )
+      // Play appropriate sounds for moves
+      if (updatedState.lastMove && updatedState.lastMove.playerId !== currentUserId) {
+        gameSounds.playLineDrawn()
 
-  // Expose the join function globally for the chat interface
-  useEffect(() => {
-    if (gameConfig.sharedGameId) {
-      // Store the join function globally so chat interface can access it
-      ;(window as any).joinMultiplayerGame = handlePlayerJoin
-    }
-
-    return () => {
-      if ((window as any).joinMultiplayerGame) {
-        delete (window as any).joinMultiplayerGame
+        if (updatedState.lastMove.boxesCompleted > 0) {
+          gameSounds.playBoxCompleted()
+        } else {
+          gameSounds.playTurnChange()
+        }
       }
-    }
-  }, [handlePlayerJoin, gameConfig.sharedGameId])
+
+      // Check for game end
+      if (updatedState.gameStatus === "finished") {
+        gameSounds.playGameEnd()
+      }
+    })
+
+    gameListenerRef.current = unsubscribe
+  }
 
   // Handle AI turns for both single and multiplayer
   useEffect(() => {
@@ -246,19 +340,13 @@ export function DotsAndBoxesGameComponent({
     drawGame()
   }, [gameState, selectedDot])
 
-  // Sync moves with Firebase for multiplayer
-  useEffect(() => {
-    if (!gameState || !game || gameConfig.mode === "single" || !gameConfig.sharedGameId) return
-
-    // Update Firebase when game state changes
-    gameSignaling.updateGame(roomId, gameState).catch(console.error)
-  }, [gameState, game, gameConfig.mode, gameConfig.sharedGameId, roomId])
-
   const makeAIMove = useCallback(
-    (aiPlayer: Player) => {
-      if (!game || !gameState) return
+    async (aiPlayer: Player) => {
+      if (!localGameRef.current || !gameState) return
 
       console.log(`🤖 ${aiPlayer.name} is making a move...`)
+
+      const localGame = localGameRef.current
 
       // Get all available moves
       const availableMoves = []
@@ -304,10 +392,21 @@ export function DotsAndBoxesGameComponent({
         }
       }
 
-      const success = game.makeMove(aiPlayer.id, selectedMove.type, selectedMove.row, selectedMove.col)
+      const success = localGame.makeMove(aiPlayer.id, selectedMove.type, selectedMove.row, selectedMove.col)
       if (success) {
-        const updatedState = game.getGameState()
+        const updatedState = localGame.getGameState()
         setGameState(updatedState)
+
+        // Sync with Firebase for multiplayer games
+        if (isMultiplayer && isHost) {
+          try {
+            await gameSignaling.sendMove(roomId, gameId, updatedState.lastMove!, updatedState)
+            console.log("📤 AI move synced to Firebase")
+          } catch (error) {
+            console.error("❌ Failed to sync AI move to Firebase:", error)
+          }
+        }
+
         gameSounds.playLineDrawn()
 
         if (updatedState.lastMove && updatedState.lastMove.boxesCompleted > 0) {
@@ -323,7 +422,7 @@ export function DotsAndBoxesGameComponent({
         }
       }
     },
-    [game, gameState, GRID_SIZE],
+    [localGameRef, gameState, GRID_SIZE, isMultiplayer, isHost, roomId, gameId],
   )
 
   // Check if a move would complete a box
@@ -623,8 +722,8 @@ export function DotsAndBoxesGameComponent({
 
   // Handle canvas click
   const handleCanvasClick = useCallback(
-    (event: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!gameState || gameState.gameStatus !== "playing" || isPaused || !game) {
+    async (event: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!gameState || gameState.gameStatus !== "playing" || isPaused || !localGameRef.current) {
         console.log("❌ Cannot make move - game not ready")
         return
       }
@@ -635,19 +734,6 @@ export function DotsAndBoxesGameComponent({
       // Skip placeholder players
       if (currentPlayer.isPlaceholder) {
         console.log("⏭️ Skipping placeholder player turn")
-        // Find next non-placeholder player
-        let nextPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length
-        let attempts = 0
-        while (gameState.players[nextPlayerIndex].isPlaceholder && attempts < gameState.players.length) {
-          nextPlayerIndex = (nextPlayerIndex + 1) % gameState.players.length
-          attempts++
-        }
-
-        if (attempts < gameState.players.length) {
-          // Update game state to skip to next available player
-          const updatedState = { ...gameState, currentPlayerIndex: nextPlayerIndex }
-          setGameState(updatedState)
-        }
         return
       }
 
@@ -658,7 +744,7 @@ export function DotsAndBoxesGameComponent({
       }
 
       // In multiplayer, only allow moves for the current human player
-      if (gameConfig.mode === "multi" && currentPlayer.id !== currentUserId) {
+      if (isMultiplayer && currentPlayer.id !== currentUserId) {
         console.log("❌ Not your turn")
         notificationSystem.info(`It's ${currentPlayer.name}'s turn`)
         return
@@ -694,12 +780,22 @@ export function DotsAndBoxesGameComponent({
         }
 
         console.log(`👤 ${currentPlayer.name} making move:`, lineInfo)
-        const success = game.makeMove(currentPlayer.id, lineInfo.type, lineInfo.row, lineInfo.col)
+        const success = localGameRef.current.makeMove(currentPlayer.id, lineInfo.type, lineInfo.row, lineInfo.col)
 
         if (success) {
           console.log("✅ Player move successful!")
-          const updatedState = game.getGameState()
+          const updatedState = localGameRef.current.getGameState()
           setGameState(updatedState)
+
+          // Sync with Firebase for multiplayer games
+          if (isMultiplayer) {
+            try {
+              await gameSignaling.sendMove(roomId, gameId, updatedState.lastMove!, updatedState)
+              console.log("📤 Player move synced to Firebase")
+            } catch (error) {
+              console.error("❌ Failed to sync player move to Firebase:", error)
+            }
+          }
 
           gameSounds.playLineDrawn()
 
@@ -723,7 +819,7 @@ export function DotsAndBoxesGameComponent({
         setSelectedDot(null)
       }
     },
-    [selectedDot, gameState, game, isPaused, gameConfig.mode, currentUserId],
+    [selectedDot, gameState, localGameRef, isPaused, isMultiplayer, currentUserId, roomId, gameId],
   )
 
   // Draw game
@@ -904,9 +1000,9 @@ export function DotsAndBoxesGameComponent({
   }
 
   const handleRestart = () => {
-    if (game) {
-      game.startGame()
-      const updatedState = game.getGameState()
+    if (localGameRef.current) {
+      localGameRef.current.startGame()
+      const updatedState = localGameRef.current.getGameState()
       setGameState(updatedState)
       setGameTime(0)
       setIsPaused(false)
@@ -951,6 +1047,10 @@ export function DotsAndBoxesGameComponent({
       return `${currentPlayer.name} is thinking...`
     }
 
+    if (currentPlayer.isPlaceholder) {
+      return `Waiting for ${currentPlayer.name}...`
+    }
+
     return `${currentPlayer.name}'s turn`
   }
 
@@ -977,6 +1077,7 @@ export function DotsAndBoxesGameComponent({
         <div className="text-white text-center">
           <div className="animate-spin w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full mx-auto mb-4" />
           <p>Loading game...</p>
+          {isMultiplayer && <p className="text-sm text-gray-400 mt-2">Connecting to multiplayer game...</p>}
         </div>
       </div>
     )
@@ -992,6 +1093,7 @@ export function DotsAndBoxesGameComponent({
         <div className="flex items-center gap-2 w-full sm:w-auto mb-2 sm:mb-0">
           <h1 className="text-xl font-bold text-cyan-400">Dots & Boxes</h1>
           <span className="text-sm text-gray-400">- {getGameModeText()}</span>
+          {isMultiplayer && <span className="text-xs text-cyan-400">{isHost ? "(Host)" : "(Player)"}</span>}
 
           {/* Current player info */}
           <div className="flex items-center gap-2 ml-auto sm:ml-4">
@@ -1002,6 +1104,9 @@ export function DotsAndBoxesGameComponent({
             <span className="font-medium text-sm">{getCurrentPlayerName()}</span>
             {gameState.players[gameState.currentPlayerIndex]?.isComputer && (
               <span className="text-xs text-gray-400">(AI)</span>
+            )}
+            {gameState.players[gameState.currentPlayerIndex]?.isPlaceholder && (
+              <span className="text-xs text-yellow-400">(Waiting)</span>
             )}
           </div>
         </div>
@@ -1067,6 +1172,10 @@ export function DotsAndBoxesGameComponent({
               <span className="text-sm">
                 {player.name}: {gameState.scores[player.id] || 0}
                 {player.isComputer && <span className="text-xs text-gray-400 ml-1">(AI)</span>}
+                {player.isPlaceholder && <span className="text-xs text-yellow-400 ml-1">(Waiting)</span>}
+                {!player.connected && !player.isPlaceholder && (
+                  <span className="text-xs text-red-400 ml-1">(Disconnected)</span>
+                )}
               </span>
             </div>
           ))}
@@ -1082,6 +1191,8 @@ export function DotsAndBoxesGameComponent({
             className={`border-2 border-slate-600 rounded-lg bg-slate-800 ${
               gameState.players[gameState.currentPlayerIndex] &&
               !gameState.players[gameState.currentPlayerIndex].isComputer &&
+              !gameState.players[gameState.currentPlayerIndex].isPlaceholder &&
+              gameState.players[gameState.currentPlayerIndex].id === currentUserId &&
               !isPaused
                 ? "cursor-pointer"
                 : "cursor-not-allowed"
@@ -1119,12 +1230,14 @@ export function DotsAndBoxesGameComponent({
                 <Play className="w-4 h-4" /> Resume Game
               </Button>
 
-              <Button
-                onClick={handleRestart}
-                className="w-full bg-amber-500 hover:bg-amber-600 flex items-center justify-center gap-2"
-              >
-                <RotateCcw className="w-4 h-4" /> Restart Game
-              </Button>
+              {!isMultiplayer && (
+                <Button
+                  onClick={handleRestart}
+                  className="w-full bg-amber-500 hover:bg-amber-600 flex items-center justify-center gap-2"
+                >
+                  <RotateCcw className="w-4 h-4" /> Restart Game
+                </Button>
+              )}
 
               <Button
                 onClick={handleSettings}
@@ -1173,12 +1286,14 @@ export function DotsAndBoxesGameComponent({
             </div>
 
             <div className="space-y-3">
-              <Button
-                onClick={handleRestart}
-                className="w-full bg-cyan-500 hover:bg-cyan-600 flex items-center justify-center gap-2"
-              >
-                <RotateCcw className="w-4 h-4" /> Play Again
-              </Button>
+              {!isMultiplayer && (
+                <Button
+                  onClick={handleRestart}
+                  className="w-full bg-cyan-500 hover:bg-cyan-600 flex items-center justify-center gap-2"
+                >
+                  <RotateCcw className="w-4 h-4" /> Play Again
+                </Button>
+              )}
 
               <Button
                 onClick={handleSettings}

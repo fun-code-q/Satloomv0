@@ -1,5 +1,5 @@
 import { database } from "@/lib/firebase"
-import { ref, set, onValue, remove, push, get } from "firebase/database"
+import { ref, set, onValue, remove, get, update } from "firebase/database"
 import type { GameState, Move } from "./dots-and-boxes-game"
 
 export class GameSignaling {
@@ -14,217 +14,74 @@ export class GameSignaling {
     return GameSignaling.instance
   }
 
-  // Create a new game
-  async createGame(roomId: string, gameState: GameState): Promise<void> {
+  // Create a new multiplayer game
+  async createMultiplayerGame(roomId: string, gameId: string, gameState: GameState): Promise<void> {
     if (!database) {
       throw new Error("Firebase database not initialized")
     }
 
     try {
-      const gameRef = ref(database, `games/${roomId}/${gameState.id}`)
+      const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
       const cleanState = this.cleanGameState(gameState)
 
-      console.log("🔥 Creating game in Firebase:", {
+      console.log("🔥 Creating multiplayer game in Firebase:", {
         gameId: gameState.id,
         roomId,
         players: gameState.players.length,
         status: gameState.gameStatus,
-        gameMode: gameState.gameMode,
-        firebasePath: `games/${roomId}/${gameState.id}`,
+        firebasePath: `multiplayer-games/${roomId}/${gameId}`,
       })
 
-      await set(gameRef, cleanState)
-      console.log("✅ Game created successfully in Firebase")
+      await set(gameRef, {
+        ...cleanState,
+        createdAt: Date.now(),
+        lastUpdated: Date.now(),
+        hostId: gameState.players.find((p) => p.isHost)?.id,
+        activePlayerIds: gameState.players.filter((p) => !p.isPlaceholder).map((p) => p.id),
+      })
+
+      console.log("✅ Multiplayer game created successfully in Firebase")
     } catch (error) {
-      console.error("❌ Error creating game:", error)
+      console.error("❌ Error creating multiplayer game:", error)
       throw error
     }
   }
 
   // Update game state with real-time synchronization
-  async updateGame(roomId: string, gameState: GameState): Promise<void> {
+  async updateGameState(roomId: string, gameId: string, gameState: GameState): Promise<void> {
     if (!database) {
       console.warn("Firebase database not initialized, cannot update game")
       return
     }
 
     try {
-      const gameRef = ref(database, `games/${roomId}/${gameState.id}`)
+      const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
       const cleanState = this.cleanGameState(gameState)
 
       console.log("🔄 Updating Firebase with game state:", {
-        gameId: gameState.id,
+        gameId,
         roomId,
         currentPlayerIndex: gameState.currentPlayerIndex,
         gameStatus: gameState.gameStatus,
         lastMoveTimestamp: gameState.lastMove?.timestamp,
-        gameMode: gameState.gameMode,
-        firebasePath: `games/${roomId}/${gameState.id}`,
+        firebasePath: `multiplayer-games/${roomId}/${gameId}`,
       })
 
-      await set(gameRef, cleanState)
-      console.log("✅ Firebase update successful")
+      await update(gameRef, {
+        ...cleanState,
+        lastUpdated: Date.now(),
+        activePlayerIds: gameState.players.filter((p) => !p.isPlaceholder).map((p) => p.id),
+      })
+
+      console.log("✅ Firebase game state update successful")
     } catch (error) {
-      console.error("❌ Firebase update failed:", error)
+      console.error("❌ Firebase game state update failed:", error)
       throw error
     }
   }
 
-  // Join an existing game
-  async joinGame(roomId: string, gameId: string, playerId: string, playerName: string): Promise<boolean> {
-    if (!database) {
-      console.warn("Firebase database not initialized")
-      return false
-    }
-
-    try {
-      const gameRef = ref(database, `games/${roomId}/${gameId}`)
-      console.log("🔍 Looking for game at Firebase path:", `games/${roomId}/${gameId}`)
-
-      // Try to get the game state with retries
-      let gameState = null
-      let attempts = 0
-      const maxAttempts = 5
-
-      while (!gameState && attempts < maxAttempts) {
-        attempts++
-        console.log(`🔄 Attempt ${attempts}/${maxAttempts} to find game`)
-
-        const snapshot = await get(gameRef)
-        if (snapshot.exists()) {
-          gameState = snapshot.val()
-          console.log("✅ Found game in Firebase:", {
-            gameId: gameState.id,
-            roomId: gameState.roomId,
-            playersCount: gameState.players?.length,
-            gameMode: gameState.gameMode,
-          })
-          break
-        } else {
-          console.log(`❌ Game not found, waiting 200ms before retry...`)
-          await new Promise((resolve) => setTimeout(resolve, 200))
-        }
-      }
-
-      if (!gameState) {
-        // Game doesn't exist in Firebase yet, this might be a new multiplayer game
-        // Let's try to create the game state based on the invitation
-        console.log("🎮 Game not found in Firebase, this might be a new multiplayer game invitation")
-        return true // Allow joining, the game will be created when host starts
-      }
-
-      console.log("🎮 Joining existing game:", {
-        gameId,
-        roomId,
-        playerId,
-        playerName,
-        currentPlayers: gameState.players?.length || 0,
-        gameMode: gameState.gameMode,
-      })
-
-      // Find an available slot (player that's not computer and not host)
-      let playerAdded = false
-      const updatedPlayers = gameState.players.map((player: any) => {
-        if (
-          !player.isComputer &&
-          !player.isHost &&
-          !playerAdded &&
-          (!player.connected || player.id === "placeholder" || player.id.startsWith("placeholder_"))
-        ) {
-          playerAdded = true
-          console.log("🔄 Updating player slot:", {
-            oldPlayer: { id: player.id, name: player.name },
-            newPlayer: { id: playerId, name: playerName },
-          })
-          return {
-            ...player,
-            id: playerId,
-            name: playerName,
-            initials: playerName.substring(0, 2).toUpperCase(),
-            connected: true,
-          }
-        }
-        return player
-      })
-
-      if (!playerAdded) {
-        console.log("✅ No existing game state, allowing join for new multiplayer game")
-        return true
-      }
-
-      const updatedGameState = {
-        ...gameState,
-        players: updatedPlayers,
-      }
-
-      console.log("🔄 Updating Firebase with joined player:", {
-        gameId,
-        roomId,
-        playerId,
-        playerName,
-        updatedPlayers: updatedPlayers.map((p: any) => ({ id: p.id, name: p.name, connected: p.connected })),
-      })
-
-      await set(gameRef, this.cleanGameState(updatedGameState))
-      console.log("✅ Successfully joined game and updated Firebase")
-      return true
-    } catch (error) {
-      console.error("❌ Error joining game:", error)
-      return true // Still allow joining in case of Firebase errors
-    }
-  }
-
-  // Listen for game updates with real-time synchronization
-  listenForGame(roomId: string, gameId: string, onUpdate: (gameState: GameState) => void): () => void {
-    if (!database) {
-      console.warn("Firebase database not initialized, game listening disabled")
-      return () => {}
-    }
-
-    const gameRef = ref(database, `games/${roomId}/${gameId}`)
-    const listenerId = `${roomId}_${gameId}`
-    const firebasePath = `games/${roomId}/${gameId}`
-
-    console.log("🔗 Setting up Firebase listener for:", firebasePath)
-
-    const unsubscribe = onValue(
-      gameRef,
-      (snapshot) => {
-        if (snapshot.exists()) {
-          const gameState = snapshot.val()
-          console.log("📡 Firebase update received:", {
-            firebasePath,
-            gameId: gameState.id,
-            roomId: gameState.roomId,
-            currentPlayerIndex: gameState.currentPlayerIndex,
-            gameStatus: gameState.gameStatus,
-            gameMode: gameState.gameMode,
-            playersCount: gameState.players?.length || 0,
-            lastMoveTimestamp: gameState.lastMove?.timestamp,
-            lastMovePlayer: gameState.lastMove?.playerName,
-          })
-          onUpdate(gameState)
-        } else {
-          console.log("❌ No game state in Firebase snapshot for path:", firebasePath)
-        }
-      },
-      (error) => {
-        console.error("❌ Firebase listener error for path:", firebasePath, error)
-      },
-    )
-
-    // Store the unsubscribe function
-    this.gameListeners.set(listenerId, unsubscribe)
-
-    return () => {
-      console.log("🔌 Unsubscribing from Firebase listener:", firebasePath)
-      unsubscribe()
-      this.gameListeners.delete(listenerId)
-    }
-  }
-
-  // Send a move with real-time synchronization
-  async sendMove(roomId: string, gameId: string, move: Move): Promise<void> {
+  // Send a move to Firebase
+  async sendMove(roomId: string, gameId: string, move: Move, gameState: GameState): Promise<void> {
     if (!database) return
 
     try {
@@ -236,11 +93,144 @@ export class GameSignaling {
         boxesCompleted: move.boxesCompleted,
       })
 
-      const moveRef = push(ref(database, `games/${roomId}/${gameId}/moves`))
-      await set(moveRef, move)
+      const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
+      const cleanState = this.cleanGameState(gameState)
+
+      await update(gameRef, {
+        ...cleanState,
+        lastMove: move,
+        lastUpdated: Date.now(),
+      })
+
       console.log("✅ Move sent successfully")
     } catch (error) {
       console.error("❌ Error sending move:", error)
+    }
+  }
+
+  // Join an existing multiplayer game
+  async joinMultiplayerGame(roomId: string, gameId: string, playerId: string, playerName: string): Promise<boolean> {
+    if (!database) {
+      console.warn("Firebase database not initialized")
+      return false
+    }
+
+    try {
+      const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
+      console.log("🔍 Looking for multiplayer game at Firebase path:", `multiplayer-games/${roomId}/${gameId}`)
+
+      const snapshot = await get(gameRef)
+      if (!snapshot.exists()) {
+        console.log("❌ Multiplayer game not found in Firebase")
+        return false
+      }
+
+      const gameState = snapshot.val()
+      console.log("🎮 Joining existing multiplayer game:", {
+        gameId,
+        roomId,
+        playerId,
+        playerName,
+        currentPlayers: gameState.players?.length || 0,
+      })
+
+      // Find an available placeholder slot
+      let playerAdded = false
+      const updatedPlayers = gameState.players.map((player: any) => {
+        if (player.isPlaceholder && !player.isComputer && !playerAdded && player.id.startsWith("placeholder_")) {
+          playerAdded = true
+          console.log("🔄 Updating player slot:", {
+            oldPlayer: { id: player.id, name: player.name },
+            newPlayer: { id: playerId, name: playerName },
+          })
+          return {
+            ...player,
+            id: playerId,
+            name: playerName,
+            initials: playerName.substring(0, 2).toUpperCase(),
+            isPlaceholder: false,
+            connected: true,
+          }
+        }
+        return player
+      })
+
+      if (!playerAdded) {
+        console.log("❌ No available slots for new player")
+        return false
+      }
+
+      const updatedGameState = {
+        ...gameState,
+        players: updatedPlayers,
+        activePlayerIds: updatedPlayers.filter((p: any) => !p.isPlaceholder).map((p: any) => p.id),
+        lastUpdated: Date.now(),
+      }
+
+      console.log("🔄 Updating Firebase with joined player:", {
+        gameId,
+        roomId,
+        playerId,
+        playerName,
+        updatedPlayers: updatedPlayers.map((p: any) => ({ id: p.id, name: p.name, connected: p.connected })),
+      })
+
+      await set(gameRef, updatedGameState)
+      console.log("✅ Successfully joined multiplayer game and updated Firebase")
+      return true
+    } catch (error) {
+      console.error("❌ Error joining multiplayer game:", error)
+      return false
+    }
+  }
+
+  // Listen for multiplayer game updates with real-time synchronization
+  listenForMultiplayerGame(roomId: string, gameId: string, onUpdate: (gameState: GameState) => void): () => void {
+    if (!database) {
+      console.warn("Firebase database not initialized, game listening disabled")
+      return () => {}
+    }
+
+    const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
+    const listenerId = `multiplayer_${roomId}_${gameId}`
+    const firebasePath = `multiplayer-games/${roomId}/${gameId}`
+
+    console.log("🔗 Setting up Firebase listener for multiplayer game:", firebasePath)
+
+    const unsubscribe = onValue(
+      gameRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const gameState = snapshot.val()
+          console.log("📡 Firebase multiplayer game update received:", {
+            firebasePath,
+            gameId: gameState.id,
+            roomId: gameState.roomId,
+            currentPlayerIndex: gameState.currentPlayerIndex,
+            gameStatus: gameState.gameStatus,
+            playersCount: gameState.players?.length || 0,
+            activePlayerIds: gameState.activePlayerIds || [],
+            lastMoveTimestamp: gameState.lastMove?.timestamp,
+            lastMovePlayer: gameState.lastMove?.playerName,
+            hostId: gameState.hostId,
+          })
+          onUpdate(gameState)
+        } else {
+          console.log("❌ No multiplayer game state in Firebase snapshot for path:", firebasePath)
+        }
+      },
+      (error) => {
+        console.error("❌ Firebase multiplayer game listener error for path:", firebasePath, error)
+      },
+    )
+
+    // Store the unsubscribe function
+    this.gameListeners.set(listenerId, unsubscribe)
+
+    return () => {
+      console.log("🔌 Unsubscribing from Firebase multiplayer game listener:", firebasePath)
+      unsubscribe()
+      this.gameListeners.delete(listenerId)
     }
   }
 
@@ -249,7 +239,7 @@ export class GameSignaling {
     if (!database) return
 
     try {
-      const gameRef = ref(database, `games/${roomId}/${gameId}`)
+      const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
       const snapshot = await get(gameRef)
 
       if (snapshot.exists()) {
@@ -264,9 +254,11 @@ export class GameSignaling {
         const updatedGameState = {
           ...gameState,
           players: updatedPlayers,
+          activePlayerIds: updatedPlayers.filter((p: any) => !p.isPlaceholder).map((p: any) => p.id),
+          lastUpdated: Date.now(),
         }
 
-        await set(gameRef, this.cleanGameState(updatedGameState))
+        await set(gameRef, updatedGameState)
         console.log(`🔗 Player ${playerId} connection status updated:`, connected)
       }
     } catch (error) {
@@ -274,55 +266,70 @@ export class GameSignaling {
     }
   }
 
-  // Listen for moves with real-time synchronization
-  listenForMoves(roomId: string, gameId: string, onMove: (move: Move) => void): () => void {
-    if (!database) {
-      console.warn("Firebase database not initialized, move listening disabled")
-      return () => {}
-    }
+  // Check if a multiplayer game exists
+  async checkMultiplayerGameExists(roomId: string, gameId: string): Promise<boolean> {
+    if (!database) return false
 
-    const movesRef = ref(database, `games/${roomId}/${gameId}/moves`)
-    const listenerId = `${roomId}_${gameId}_moves`
-
-    console.log("🔗 Setting up move listener for:", `games/${roomId}/${gameId}/moves`)
-
-    const unsubscribe = onValue(movesRef, (snapshot) => {
-      const moves = snapshot.val()
-      if (moves) {
-        // Get the latest move
-        const moveKeys = Object.keys(moves)
-        const latestMoveKey = moveKeys[moveKeys.length - 1]
-        const latestMove = moves[latestMoveKey]
-
-        console.log("📡 New move received:", {
-          move: `${latestMove.type} ${latestMove.row},${latestMove.col}`,
-          player: latestMove.playerName,
-          boxesCompleted: latestMove.boxesCompleted,
-        })
-
-        onMove(latestMove)
-      }
-    })
-
-    this.gameListeners.set(listenerId, unsubscribe)
-    return () => {
-      console.log("🔌 Unsubscribing from move listener")
-      unsubscribe()
-      this.gameListeners.delete(listenerId)
+    try {
+      const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
+      const snapshot = await get(gameRef)
+      return snapshot.exists()
+    } catch (error) {
+      console.error("❌ Error checking multiplayer game existence:", error)
+      return false
     }
   }
 
-  // End game
-  async endGame(roomId: string, gameId: string): Promise<void> {
+  // Get multiplayer game state
+  async getMultiplayerGameState(roomId: string, gameId: string): Promise<GameState | null> {
+    if (!database) return null
+
+    try {
+      const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
+      const snapshot = await get(gameRef)
+
+      if (snapshot.exists()) {
+        return snapshot.val()
+      }
+      return null
+    } catch (error) {
+      console.error("❌ Error getting multiplayer game state:", error)
+      return null
+    }
+  }
+
+  // End multiplayer game
+  async endMultiplayerGame(roomId: string, gameId: string): Promise<void> {
     if (!database) return
 
     try {
-      const gameRef = ref(database, `games/${roomId}/${gameId}`)
+      const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
       await remove(gameRef)
-      console.log("🗑️ Game removed from Firebase")
+      console.log("🗑️ Multiplayer game removed from Firebase")
     } catch (error) {
-      console.error("❌ Error ending game:", error)
+      console.error("❌ Error ending multiplayer game:", error)
     }
+  }
+
+  // Legacy methods for backward compatibility
+  async createGame(roomId: string, gameState: GameState): Promise<void> {
+    return this.createMultiplayerGame(roomId, gameState.id, gameState)
+  }
+
+  async updateGame(roomId: string, gameState: GameState): Promise<void> {
+    return this.updateGameState(roomId, gameState.id, gameState)
+  }
+
+  async joinGame(roomId: string, gameId: string, playerId: string, playerName: string): Promise<boolean> {
+    return this.joinMultiplayerGame(roomId, gameId, playerId, playerName)
+  }
+
+  listenForGame(roomId: string, gameId: string, onUpdate: (gameState: GameState) => void): () => void {
+    return this.listenForMultiplayerGame(roomId, gameId, onUpdate)
+  }
+
+  async endGame(roomId: string, gameId: string): Promise<void> {
+    return this.endMultiplayerGame(roomId, gameId)
   }
 
   // Clean game state for Firebase (remove functions and complex objects)
@@ -345,7 +352,6 @@ export class GameSignaling {
         boxes: cleanState.boxes || [],
         players: cleanState.players || [],
         scores: cleanState.scores || {},
-        gameMode: cleanState.gameMode || "single",
       }
     } catch (error) {
       console.error("❌ Error cleaning game state:", error)

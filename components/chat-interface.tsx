@@ -762,7 +762,10 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             players: config.players.map((player, index) => {
               if (index === 0) {
                 // Host keeps their info
-                return player
+                return {
+                  ...player,
+                  id: currentUserId, // Set the host's actual user ID
+                }
               } else if (player.isAI) {
                 // AI players keep their info
                 return player
@@ -829,8 +832,25 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     try {
       console.log("Accepting game invite:", activeGameInvite.id)
 
-      // Join the game with the shared config
-      setPlaygroundConfig(activeGameInvite.gameConfig)
+      // Create a config for the joining player
+      const joiningConfig = {
+        ...activeGameInvite.gameConfig,
+        players: activeGameInvite.gameConfig.players.map((player, index) => {
+          // Find the first placeholder slot and assign it to the current user
+          if (player.isPlaceholder && !player.isAI && player.id.startsWith("placeholder_")) {
+            return {
+              ...player,
+              id: currentUserId,
+              name: userProfile.name,
+              isPlaceholder: false,
+            }
+          }
+          return player
+        }),
+      }
+
+      // Join the game with the updated config
+      setPlaygroundConfig(joiningConfig)
       setIsGameHost(false)
       setShowPlayground(true)
       setActiveGameInvite(null)
