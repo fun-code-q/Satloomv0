@@ -105,7 +105,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   const [replyingTo, setReplyingTo] = useState<Message | null>(null)
   const [onlineUsers, setOnlineUsers] = useState<UserPresence[]>([])
   const [isTyping, setIsTyping] = useState(false)
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [showEmojiPicker, setShowQuizPicker] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -381,7 +381,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
   const handleEmojiSelect = (emoji: string) => {
     setMessage((prev) => prev + emoji)
-    setShowEmojiPicker(false)
+    setShowQuizPicker(false)
   }
 
   const handleStartMediaRecording = (mode: "audio" | "video" | "photo") => {
@@ -693,44 +693,91 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         userPresence.updateActivity(roomId, currentUserId, "game")
         notificationSystem.success("Game started against AI!")
       } else {
-        // Multiplayer modes - create a shared game ID and send invitation
-        const sharedGameId = `game_${roomId}_${Date.now()}`
+        // Multiplayer mode
+        const aiCount = config.players.filter((p) => p.isAI).length
+        const humanCount = config.players.filter((p) => !p.isAI).length
 
-        const gameInvite: GameInvite = {
-          id: sharedGameId,
-          roomId,
-          hostId: currentUserId,
-          hostName: userProfile.name,
-          gameConfig: { ...config, sharedGameId }, // Add shared game ID to config
-          timestamp: Date.now(),
+        if (humanCount === 1) {
+          // Only host is human, all others are AI - no need to send invitation
+          const gameMessage =
+            aiCount === 1
+              ? `🎮 ${userProfile.name} started playing Dots & Boxes against 1 AI opponent.`
+              : `🎮 ${userProfile.name} started playing Dots & Boxes against ${aiCount} AI opponents.`
+
+          await messageStorage.sendMessage(roomId, {
+            text: gameMessage,
+            sender: "System",
+            timestamp: new Date(),
+            type: "system",
+            reactions: {
+              heart: [],
+              thumbsUp: [],
+            },
+          })
+
+          setPlaygroundConfig(config)
+          setIsGameHost(true)
+          setShowPlaygroundSetup(false)
+          setShowPlayground(true)
+          userPresence.updateActivity(roomId, currentUserId, "game")
+          notificationSystem.success(`Game started against ${aiCount} AI!`)
+        } else {
+          // There are other human players - send invitation
+          const sharedGameId = `game_${roomId}_${Date.now()}`
+
+          // Create a multiplayer config with placeholder slots
+          const multiplayerConfig = {
+            ...config,
+            sharedGameId,
+            players: config.players.map((player, index) => {
+              if (index === 0) {
+                // Host keeps their info
+                return player
+              } else if (player.isAI) {
+                // AI players keep their info
+                return player
+              } else {
+                // Human players become placeholder slots
+                return {
+                  ...player,
+                  id: `placeholder_${index}`,
+                  name: `Player ${index + 1}`,
+                  isPlaceholder: true,
+                }
+              }
+            }),
+          }
+
+          const gameInvite: GameInvite = {
+            id: sharedGameId,
+            roomId,
+            hostId: currentUserId,
+            hostName: userProfile.name,
+            gameConfig: multiplayerConfig,
+            timestamp: Date.now(),
+          }
+
+          await messageStorage.sendMessage(roomId, {
+            text: `🎮 ${userProfile.name} started a ${config.gameType} multiplayer game! Click to join.`,
+            sender: "System",
+            timestamp: new Date(),
+            type: "game-invite",
+            gameInvite: gameInvite,
+            reactions: {
+              heart: [],
+              thumbsUp: [],
+            },
+          })
+
+          // Start the game for the host with the multiplayer config
+          setPlaygroundConfig(multiplayerConfig)
+          setIsGameHost(true)
+          setShowPlaygroundSetup(false)
+          setShowPlayground(true)
+          userPresence.updateActivity(roomId, currentUserId, "game")
+
+          notificationSystem.success("Multiplayer game started! Waiting for other players to join.")
         }
-
-        // Send game invite to Firebase for other users to see
-        await messageStorage.sendMessage(roomId, {
-          text: `🎮 ${userProfile.name} started a ${config.gameType} game (${config.mode === "double" ? "1v1" : "multiplayer"})! Click to join.`,
-          sender: "System",
-          timestamp: new Date(),
-          type: "game-invite",
-          gameInvite: gameInvite,
-          reactions: {
-            heart: [],
-            thumbsUp: [],
-          },
-        })
-
-        // Start the game for the host WITHOUT the shared game ID (so they're recognized as host)
-        const hostConfig = { ...config }
-        delete hostConfig.sharedGameId // Remove sharedGameId for host
-
-        setPlaygroundConfig(hostConfig)
-        setIsGameHost(true)
-        setShowPlaygroundSetup(false)
-        setShowPlayground(true)
-        userPresence.updateActivity(roomId, currentUserId, "game")
-
-        notificationSystem.success(
-          `${config.mode === "double" ? "1v1" : "Multiplayer"} game started! Waiting for other players to join.`,
-        )
       }
     } catch (error) {
       console.error("Error starting playground game:", error)
@@ -745,19 +792,42 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     userPresence.updateActivity(roomId, currentUserId, "chat")
   }
 
-  const handleAcceptGameInvite = () => {
-    if (gameInvite) {
-      // Joiner gets the config WITH sharedGameId
-      setPlaygroundConfig(gameInvite.gameConfig)
-      setIsGameHost(false) // Joining player is not the host
-      setShowPlayground(true)
+  const handleAcceptGameInvite = async () => {
+    if (!gameInvite) return
+
+    try {
+      // Check if there's an active game to join
+      const success = await gameSignaling.joinGame(roomId, gameInvite.id, currentUserId, userProfile.name)
+
+      if (success) {
+        // Join the game with the shared config
+        setPlaygroundConfig(gameInvite.gameConfig)
+        setIsGameHost(false)
+        setShowPlayground(true)
+        setGameInvite(null)
+        userPresence.updateActivity(roomId, currentUserId, "game")
+
+        // Try to join the actual game if there's a global join function
+        if ((window as any).joinMultiplayerGame) {
+          await (window as any).joinMultiplayerGame(currentUserId, userProfile.name)
+        }
+
+        notificationSystem.success(`Joined the game as ${userProfile.name}!`)
+      } else {
+        notificationSystem.error("Could not join the game - no available slots")
+        setGameInvite(null)
+      }
+    } catch (error) {
+      console.error("Error joining game:", error)
+      notificationSystem.error("Failed to join game")
       setGameInvite(null)
-      userPresence.updateActivity(roomId, currentUserId, "game")
     }
   }
 
   const handleDeclineGameInvite = () => {
+    console.log("Declining game invite:", gameInvite?.id)
     setGameInvite(null)
+    notificationSystem.success("Game invitation declined")
   }
 
   const menuItems = [
@@ -1052,14 +1122,16 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             messages.map((msg) => {
               // Check if this message has a game invite
               if (msg.type === "game-invite" && msg.gameInvite) {
-                // Only show game invite for users who are NOT the host
+                // Only show game invite for users who are NOT the host and don't already have an active invite
                 if (
                   msg.gameInvite.hostId !== currentUserId &&
                   !gameInvite &&
-                  msg.gameInvite.timestamp > Date.now() - 300000
+                  msg.gameInvite.timestamp > Date.now() - 300000 // 5 minutes validity
                 ) {
-                  // 5 minutes validity
-                  setGameInvite(msg.gameInvite)
+                  // Set the game invite in the next tick to avoid state update during render
+                  setTimeout(() => {
+                    setGameInvite(msg.gameInvite)
+                  }, 0)
                 }
               }
 
@@ -1156,7 +1228,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             variant="ghost"
             size="icon"
             className="text-gray-400 hover:text-white hover:bg-slate-700"
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            onClick={() => setShowQuizPicker(!showEmojiPicker)}
           >
             <Smile className="w-4 h-4" />
           </Button>
@@ -1174,7 +1246,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         {/* Emoji Picker */}
         <EmojiPicker
           isOpen={showEmojiPicker}
-          onClose={() => setShowEmojiPicker(false)}
+          onClose={() => setShowQuizPicker(false)}
           onEmojiSelect={handleEmojiSelect}
         />
       </div>
@@ -1261,7 +1333,6 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             roomId={roomId}
             currentUserId={currentUserId}
             onExit={handleExitPlayground}
-            isHost={isGameHost} // This will be true for host, false for joiner
           />
         </div>
       )}

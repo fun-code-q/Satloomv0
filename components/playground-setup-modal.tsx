@@ -10,15 +10,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Gamepad2, Users, Bot, Mic, Settings, Palette } from "lucide-react"
+import { Gamepad2, Users, Bot, Settings, Palette } from "lucide-react"
 
 export interface GameConfig {
   gameType: "dots-and-boxes"
-  mode: "single" | "double" | "multi"
+  mode: "single" | "multi"
   gridSize: number
   difficulty: "easy" | "medium" | "hard"
   voiceChatEnabled: boolean
-  sharedGameId?: string // Add this line
+  sharedGameId?: string
   players: Array<{
     id: string
     name: string
@@ -46,22 +46,17 @@ const PLAYER_COLORS = [
 
 export function PlaygroundSetupModal({ isOpen, onClose, onStartGame }: PlaygroundSetupModalProps) {
   const [gameType] = useState<"dots-and-boxes">("dots-and-boxes")
-  const [mode, setMode] = useState<"single" | "double" | "multi">("single")
+  const [mode, setMode] = useState<"single" | "multi">("single")
   const [gridSize, setGridSize] = useState(4)
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium")
   const [voiceChatEnabled, setVoiceChatEnabled] = useState(false)
   const [players, setPlayers] = useState([{ id: "player1", name: "You", color: PLAYER_COLORS[0], isAI: false }])
 
-  const handleModeChange = (newMode: "single" | "double" | "multi") => {
+  const handleModeChange = (newMode: "single" | "multi") => {
     setMode(newMode)
 
     if (newMode === "single") {
       setPlayers([{ id: "player1", name: "You", color: PLAYER_COLORS[0], isAI: false }])
-    } else if (newMode === "double") {
-      setPlayers([
-        { id: "player1", name: "You", color: PLAYER_COLORS[0], isAI: false },
-        { id: "player2", name: "Player 2", color: PLAYER_COLORS[1], isAI: false },
-      ])
     } else {
       setPlayers([
         { id: "player1", name: "You", color: PLAYER_COLORS[0], isAI: false },
@@ -126,7 +121,7 @@ export function PlaygroundSetupModal({ isOpen, onClose, onStartGame }: Playgroun
               Players
             </TabsTrigger>
             <TabsTrigger value="settings" className="data-[state=active]:bg-slate-600">
-              Settings
+              Rules
             </TabsTrigger>
           </TabsList>
 
@@ -137,7 +132,7 @@ export function PlaygroundSetupModal({ isOpen, onClose, onStartGame }: Playgroun
                 <CardDescription className="text-gray-300">Choose how you want to play</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <Button
                     variant={mode === "single" ? "default" : "outline"}
                     className={`h-20 flex flex-col gap-2 ${
@@ -147,17 +142,6 @@ export function PlaygroundSetupModal({ isOpen, onClose, onStartGame }: Playgroun
                   >
                     <Bot className="w-6 h-6" />
                     <span>vs AI</span>
-                  </Button>
-
-                  <Button
-                    variant={mode === "double" ? "default" : "outline"}
-                    className={`h-20 flex flex-col gap-2 ${
-                      mode === "double" ? "bg-cyan-500 hover:bg-cyan-600" : "border-slate-600 hover:bg-slate-600"
-                    }`}
-                    onClick={() => handleModeChange("double")}
-                  >
-                    <Users className="w-6 h-6" />
-                    <span>1v1 Online</span>
                   </Button>
 
                   <Button
@@ -218,7 +202,6 @@ export function PlaygroundSetupModal({ isOpen, onClose, onStartGame }: Playgroun
                 </CardTitle>
                 <CardDescription className="text-gray-300">
                   {mode === "single" && "Playing against AI"}
-                  {mode === "double" && "1v1 match with another player"}
                   {mode === "multi" && "Multiplayer game with up to 6 players"}
                 </CardDescription>
               </CardHeader>
@@ -237,7 +220,7 @@ export function PlaygroundSetupModal({ isOpen, onClose, onStartGame }: Playgroun
                         value={player.name}
                         onChange={(e) => updatePlayer(index, "name", e.target.value)}
                         className="bg-slate-500 border-slate-400 text-white"
-                        disabled={index === 0} // Can't change host name
+                        placeholder="Enter your name"
                       />
                     </div>
 
@@ -304,25 +287,12 @@ export function PlaygroundSetupModal({ isOpen, onClose, onStartGame }: Playgroun
               <CardHeader>
                 <CardTitle className="text-white flex items-center gap-2">
                   <Settings className="w-5 h-5" />
-                  Game Settings
+                  Game Rules
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {(mode === "double" || mode === "multi") && (
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-1">
-                      <Label className="text-white flex items-center gap-2">
-                        <Mic className="w-4 h-4" />
-                        Voice Chat
-                      </Label>
-                      <p className="text-sm text-gray-400">Enable voice communication during the game</p>
-                    </div>
-                    <Switch checked={voiceChatEnabled} onCheckedChange={setVoiceChatEnabled} />
-                  </div>
-                )}
-
                 <div className="space-y-2">
-                  <Label className="text-white">Game Rules</Label>
+                  <Label className="text-white"></Label>
                   <div className="text-sm text-gray-300 space-y-1">
                     <p>• Connect dots to form boxes</p>
                     <p>• Complete a box to score a point</p>

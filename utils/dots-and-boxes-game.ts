@@ -24,6 +24,8 @@ export interface Player {
   isComputer: boolean
   isHost: boolean
   initials: string
+  isPlaceholder?: boolean
+  connected?: boolean
 }
 
 export interface GridDot {
@@ -463,5 +465,37 @@ export class DotsAndBoxesGame {
     }
 
     return moves
+  }
+
+  public joinPlayer(slotIndex: number, playerId: string, playerName: string): boolean {
+    try {
+      if (slotIndex < 0 || slotIndex >= this.gameState.players.length) {
+        return false
+      }
+
+      const player = this.gameState.players[slotIndex]
+      if (!player.isPlaceholder || player.isComputer) {
+        return false
+      }
+
+      // Update the player slot
+      this.gameState.players[slotIndex] = {
+        ...player,
+        id: playerId,
+        name: playerName,
+        initials: playerName.substring(0, 2).toUpperCase(),
+        isPlaceholder: false,
+        connected: true,
+      }
+
+      // Initialize score for the new player
+      this.gameState.scores[playerId] = 0
+
+      console.log(`Player ${playerName} joined slot ${slotIndex}`)
+      return true
+    } catch (err) {
+      console.error(`Error joining player: ${err}`)
+      return false
+    }
   }
 }

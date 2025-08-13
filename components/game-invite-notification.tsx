@@ -31,7 +31,11 @@ export function GameInviteNotification({ invite, onAccept, onDecline }: GameInvi
   }
 
   return (
-    <div className="fixed top-4 right-4 z-50 bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-2xl max-w-sm animate-in slide-in-from-right-5" role="alert" aria-label="Game invitation">
+    <div
+      className="fixed top-4 right-4 z-50 bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-2xl max-w-sm animate-in slide-in-from-right-5"
+      role="alert"
+      aria-label="Game invitation"
+    >
       <div className="flex items-start gap-4">
         <div className="w-12 h-12 bg-purple-500/20 rounded-full flex items-center justify-center flex-shrink-0">
           <Gamepad2 className="w-6 h-6 text-purple-400" />
@@ -52,14 +56,19 @@ export function GameInviteNotification({ invite, onAccept, onDecline }: GameInvi
           <p className="text-gray-400 text-xs mb-3">{formatTimeAgo(invite.timestamp)}</p>
 
           <div className="flex gap-2">
-            <Button onClick={onAccept} size="sm" className="bg-purple-500 hover:bg-purple-600 text-white flex-1" aria-label="Join game">
+            <Button
+              onClick={onAccept}
+              size="sm"
+              className="bg-purple-500 hover:bg-purple-600 text-white flex-1"
+              aria-label="Join game"
+            >
               Join Game
             </Button>
             <Button
               onClick={onDecline}
               variant="outline"
               size="sm"
-              className="border-slate-600 text-gray-300 bg-transparent"
+              className="border-slate-600 text-gray-300 bg-transparent hover:bg-slate-700 hover:text-white"
               aria-label="Decline invitation"
             >
               <X className="w-4 h-4" />
