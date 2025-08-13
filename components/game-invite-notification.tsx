@@ -1,7 +1,8 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import { Gamepad2, X } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Gamepad2, Users, Clock, X } from "lucide-react"
 
 interface GameInvite {
   id: string
@@ -11,8 +12,14 @@ interface GameInvite {
   gameConfig: {
     gameType: string
     difficulty?: string
+    maxPlayers?: number
+    players?: Array<{
+      name: string
+      isAI?: boolean
+    }>
   }
   timestamp: number
+  status?: "active" | "expired" | "full"
 }
 
 interface GameInviteNotificationProps {
@@ -30,9 +37,40 @@ export function GameInviteNotification({ invite, onAccept, onDecline }: GameInvi
     return "Over an hour ago"
   }
 
+  const getGameTypeDisplay = (gameType: string) => {
+    switch (gameType) {
+      case "dots-and-boxes":
+        return "Dots & Boxes"
+      case "tic-tac-toe":
+        return "Tic Tac Toe"
+      case "chess":
+        return "Chess"
+      default:
+        return gameType.replace("-", " ").replace(/\b\w/g, (l) => l.toUpperCase())
+    }
+  }
+
+  const getPlayerInfo = () => {
+    if (!invite.gameConfig.players) return "Multiplayer"
+
+    const humanPlayers = invite.gameConfig.players.filter((p) => !p.isAI)
+    const aiPlayers = invite.gameConfig.players.filter((p) => p.isAI)
+
+    if (aiPlayers.length === 0) {
+      return `${humanPlayers.length} Players`
+    } else if (humanPlayers.length === 1) {
+      return `vs ${aiPlayers.length} AI`
+    } else {
+      return `${humanPlayers.length} Players + ${aiPlayers.length} AI`
+    }
+  }
+
+  // Check if invite is expired (5 minutes)
+  const isExpired = Date.now() - invite.timestamp > 300000
+
   return (
     <div
-      className="fixed top-4 right-4 z-50 bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-2xl max-w-sm animate-in slide-in-from-right-5"
+      className="fixed top-4 right-4 z-50 bg-gradient-to-br from-purple-900/95 to-blue-900/95 backdrop-blur-sm border border-purple-500/30 rounded-2xl p-6 shadow-2xl max-w-sm animate-in slide-in-from-right-5"
       role="alert"
       aria-label="Game invitation"
     >
@@ -42,38 +80,75 @@ export function GameInviteNotification({ invite, onAccept, onDecline }: GameInvi
         </div>
 
         <div className="flex-1 min-w-0">
-          <h3 className="text-white font-semibold mb-1">Game Invitation</h3>
-          <p className="text-gray-300 text-sm mb-1">
-            <span className="font-medium text-purple-400">{invite.hostName}</span> invited you to play{" "}
-            <span className="font-medium">{invite.gameConfig.gameType}</span>
-            {invite.gameConfig.difficulty && (
-              <>
-                {" "}
-                on <span className="font-medium">{invite.gameConfig.difficulty}</span> difficulty
-              </>
-            )}
-          </p>
-          <p className="text-gray-400 text-xs mb-3">{formatTimeAgo(invite.timestamp)}</p>
-
-          <div className="flex gap-2">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-white font-semibold">Game Invitation</h3>
             <Button
-              onClick={onAccept}
+              variant="ghost"
               size="sm"
-              className="bg-purple-500 hover:bg-purple-600 text-white flex-1"
-              aria-label="Join game"
-            >
-              Join Game
-            </Button>
-            <Button
               onClick={onDecline}
-              variant="outline"
-              size="sm"
-              className="border-slate-600 text-gray-300 bg-transparent hover:bg-slate-700 hover:text-white"
-              aria-label="Decline invitation"
+              className="h-6 w-6 p-0 text-gray-400 hover:text-white hover:bg-white/10"
+              aria-label="Close invitation"
             >
               <X className="w-4 h-4" />
             </Button>
           </div>
+
+          <p className="text-gray-300 text-sm mb-3">
+            <span className="font-medium text-purple-400">{invite.hostName}</span> invited you to play{" "}
+            <span className="font-medium text-white">{getGameTypeDisplay(invite.gameConfig.gameType)}</span>
+          </p>
+
+          <div className="flex flex-wrap gap-2 mb-3">
+            <Badge variant="secondary" className="bg-purple-500/20 text-purple-200 border-purple-400/30">
+              <Users className="w-3 h-3 mr-1" />
+              {getPlayerInfo()}
+            </Badge>
+
+            {invite.gameConfig.difficulty && (
+              <Badge variant="secondary" className="bg-blue-500/20 text-blue-200 border-blue-400/30">
+                {invite.gameConfig.difficulty}
+              </Badge>
+            )}
+
+            <Badge variant="secondary" className="bg-gray-500/20 text-gray-200 border-gray-400/30">
+              <Clock className="w-3 h-3 mr-1" />
+              {formatTimeAgo(invite.timestamp)}
+            </Badge>
+          </div>
+
+          {isExpired ? (
+            <div className="text-center">
+              <p className="text-red-300 text-sm mb-2">This invitation has expired</p>
+              <Button
+                onClick={onDecline}
+                variant="outline"
+                size="sm"
+                className="w-full border-red-400/30 text-red-300 hover:bg-red-500/20 hover:text-red-200 bg-transparent"
+              >
+                Dismiss
+              </Button>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <Button
+                onClick={onAccept}
+                size="sm"
+                className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white flex-1 border-0"
+                aria-label="Join game"
+              >
+                Join Game
+              </Button>
+              <Button
+                onClick={onDecline}
+                variant="outline"
+                size="sm"
+                className="border-purple-500/30 text-purple-200 hover:bg-purple-500/10 hover:text-white bg-transparent"
+                aria-label="Decline invitation"
+              >
+                Decline
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     </div>

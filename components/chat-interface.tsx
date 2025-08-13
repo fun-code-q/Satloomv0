@@ -71,6 +71,7 @@ interface GameInvite {
   hostName: string
   gameConfig: GameConfig
   timestamp: number
+  status?: "active" | "expired" | "full"
 }
 
 // Generate consistent colors for users
@@ -105,7 +106,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   const [replyingTo, setReplyingTo] = useState<Message | null>(null)
   const [onlineUsers, setOnlineUsers] = useState<UserPresence[]>([])
   const [isTyping, setIsTyping] = useState(false)
-  const [showEmojiPicker, setShowQuizPicker] = useState(false)
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -129,8 +130,9 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   const [playgroundConfig, setPlaygroundConfig] = useState<GameConfig | null>(null)
   const [isGameHost, setIsGameHost] = useState(false)
 
-  // Game invite state
-  const [gameInvite, setGameInvite] = useState<GameInvite | null>(null)
+  // Game invite state - now tracks multiple invites
+  const [gameInvites, setGameInvites] = useState<GameInvite[]>([])
+  const [activeGameInvite, setActiveGameInvite] = useState<GameInvite | null>(null)
 
   const [showTheaterSetup, setShowTheaterSetup] = useState(false)
   const [showTheaterFullscreen, setShowTheaterFullscreen] = useState(false)
@@ -199,6 +201,25 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     // Listen for messages
     const messageUnsubscribe = messageStorage.listenForMessages(roomId, (newMessages) => {
       setMessages(newMessages)
+
+      // Process game invites from messages
+      const gameInviteMessages = newMessages.filter(
+        (msg) => msg.type === "game-invite" && msg.gameInvite && msg.gameInvite.hostId !== currentUserId,
+      )
+
+      // Update game invites state
+      const currentInvites = gameInviteMessages.map((msg) => ({
+        ...msg.gameInvite,
+        status: msg.gameInvite.timestamp > Date.now() - 300000 ? "active" : "expired", // 5 minutes validity
+      }))
+
+      setGameInvites(currentInvites)
+
+      // Show the most recent active invite
+      const latestActiveInvite = currentInvites.find((invite) => invite.status === "active")
+      if (latestActiveInvite && !activeGameInvite) {
+        setActiveGameInvite(latestActiveInvite)
+      }
     })
 
     // Listen for user presence
@@ -381,7 +402,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
   const handleEmojiSelect = (emoji: string) => {
     setMessage((prev) => prev + emoji)
-    setShowQuizPicker(false)
+    setShowEmojiPicker(false)
   }
 
   const handleStartMediaRecording = (mode: "audio" | "video" | "photo") => {
@@ -755,6 +776,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             hostName: userProfile.name,
             gameConfig: multiplayerConfig,
             timestamp: Date.now(),
+            status: "active",
           }
 
           await messageStorage.sendMessage(roomId, {
@@ -792,19 +814,19 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     userPresence.updateActivity(roomId, currentUserId, "chat")
   }
 
-  const handleAcceptGameInvite = async () => {
-    if (!gameInvite) return
-
+  const handleAcceptGameInvite = async (invite: GameInvite) => {
     try {
+      console.log("Accepting game invite:", invite.id)
+
       // Check if there's an active game to join
-      const success = await gameSignaling.joinGame(roomId, gameInvite.id, currentUserId, userProfile.name)
+      const success = await gameSignaling.joinGame(roomId, invite.id, currentUserId, userProfile.name)
 
       if (success) {
         // Join the game with the shared config
-        setPlaygroundConfig(gameInvite.gameConfig)
+        setPlaygroundConfig(invite.gameConfig)
         setIsGameHost(false)
         setShowPlayground(true)
-        setGameInvite(null)
+        setActiveGameInvite(null)
         userPresence.updateActivity(roomId, currentUserId, "game")
 
         // Try to join the actual game if there's a global join function
@@ -813,21 +835,49 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         }
 
         notificationSystem.success(`Joined the game as ${userProfile.name}!`)
+
+        // Send a message to the chat that user joined
+        await messageStorage.sendMessage(roomId, {
+          text: `🎮 ${userProfile.name} joined the multiplayer game!`,
+          sender: "System",
+          timestamp: new Date(),
+          type: "system",
+          reactions: {
+            heart: [],
+            thumbsUp: [],
+          },
+        })
       } else {
         notificationSystem.error("Could not join the game - no available slots")
-        setGameInvite(null)
+        setActiveGameInvite(null)
       }
     } catch (error) {
       console.error("Error joining game:", error)
       notificationSystem.error("Failed to join game")
-      setGameInvite(null)
+      setActiveGameInvite(null)
     }
   }
 
-  const handleDeclineGameInvite = () => {
-    console.log("Declining game invite:", gameInvite?.id)
-    setGameInvite(null)
+  const handleDeclineGameInvite = async (invite: GameInvite) => {
+    console.log("Declining game invite:", invite.id)
+    setActiveGameInvite(null)
+
+    // Remove this invite from the list
+    setGameInvites((prev) => prev.filter((inv) => inv.id !== invite.id))
+
     notificationSystem.success("Game invitation declined")
+
+    // Send a message to the chat that user declined
+    await messageStorage.sendMessage(roomId, {
+      text: `${userProfile.name} declined the game invitation.`,
+      sender: "System",
+      timestamp: new Date(),
+      type: "system",
+      reactions: {
+        heart: [],
+        thumbsUp: [],
+      },
+    })
   }
 
   const menuItems = [
@@ -1119,38 +1169,21 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
               <p className="text-xs mt-2">Room ID: {roomId}</p>
             </div>
           ) : (
-            messages.map((msg) => {
-              // Check if this message has a game invite
-              if (msg.type === "game-invite" && msg.gameInvite) {
-                // Only show game invite for users who are NOT the host and don't already have an active invite
-                if (
-                  msg.gameInvite.hostId !== currentUserId &&
-                  !gameInvite &&
-                  msg.gameInvite.timestamp > Date.now() - 300000 // 5 minutes validity
-                ) {
-                  // Set the game invite in the next tick to avoid state update during render
-                  setTimeout(() => {
-                    setGameInvite(msg.gameInvite)
-                  }, 0)
-                }
-              }
-
-              return (
-                <MessageBubble
-                  key={msg.id}
-                  message={msg}
-                  isOwnMessage={msg.sender === userProfile.name}
-                  userColor={getUserColor(msg.sender)}
-                  currentUser={userProfile.name}
-                  userAvatar={onlineUsers.find((u) => u.name === msg.sender)?.avatar}
-                  onReply={handleMessageReply}
-                  onReact={handleMessageReact}
-                  onDelete={handleMessageDelete}
-                  onEdit={handleMessageEdit}
-                  onCopy={handleMessageCopy}
-                />
-              )
-            })
+            messages.map((msg) => (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                isOwnMessage={msg.sender === userProfile.name}
+                userColor={getUserColor(msg.sender)}
+                currentUser={userProfile.name}
+                userAvatar={onlineUsers.find((u) => u.name === msg.sender)?.avatar}
+                onReply={handleMessageReply}
+                onReact={handleMessageReact}
+                onDelete={handleMessageDelete}
+                onEdit={handleMessageEdit}
+                onCopy={handleMessageCopy}
+              />
+            ))
           )}
           <div ref={messagesEndRef} />
         </div>
@@ -1228,7 +1261,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             variant="ghost"
             size="icon"
             className="text-gray-400 hover:text-white hover:bg-slate-700"
-            onClick={() => setShowQuizPicker(!showEmojiPicker)}
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
           >
             <Smile className="w-4 h-4" />
           </Button>
@@ -1246,7 +1279,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         {/* Emoji Picker */}
         <EmojiPicker
           isOpen={showEmojiPicker}
-          onClose={() => setShowQuizPicker(false)}
+          onClose={() => setShowEmojiPicker(false)}
           onEmojiSelect={handleEmojiSelect}
         />
       </div>
@@ -1273,12 +1306,12 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         />
       )}
 
-      {/* Game Invite Notification */}
-      {gameInvite && (
+      {/* Game Invite Notification - Show the active invite */}
+      {activeGameInvite && (
         <GameInviteNotification
-          invite={gameInvite}
-          onAccept={handleAcceptGameInvite}
-          onDecline={handleDeclineGameInvite}
+          invite={activeGameInvite}
+          onAccept={() => handleAcceptGameInvite(activeGameInvite)}
+          onDecline={() => handleDeclineGameInvite(activeGameInvite)}
         />
       )}
 
