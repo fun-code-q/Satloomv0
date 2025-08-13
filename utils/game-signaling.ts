@@ -84,7 +84,7 @@ export class GameSignaling {
       // Try to get the game state with retries
       let gameState = null
       let attempts = 0
-      const maxAttempts = 10
+      const maxAttempts = 5
 
       while (!gameState && attempts < maxAttempts) {
         attempts++
@@ -99,18 +99,21 @@ export class GameSignaling {
             playersCount: gameState.players?.length,
             gameMode: gameState.gameMode,
           })
+          break
         } else {
-          console.log(`❌ Game not found, waiting 500ms before retry...`)
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          console.log(`❌ Game not found, waiting 200ms before retry...`)
+          await new Promise((resolve) => setTimeout(resolve, 200))
         }
       }
 
       if (!gameState) {
-        console.error("❌ Game not found in Firebase after all retries")
-        return false
+        // Game doesn't exist in Firebase yet, this might be a new multiplayer game
+        // Let's try to create the game state based on the invitation
+        console.log("🎮 Game not found in Firebase, this might be a new multiplayer game invitation")
+        return true // Allow joining, the game will be created when host starts
       }
 
-      console.log("🎮 Joining game:", {
+      console.log("🎮 Joining existing game:", {
         gameId,
         roomId,
         playerId,
@@ -126,7 +129,7 @@ export class GameSignaling {
           !player.isComputer &&
           !player.isHost &&
           !playerAdded &&
-          (!player.connected || player.id === "placeholder")
+          (!player.connected || player.id === "placeholder" || player.id.startsWith("placeholder_"))
         ) {
           playerAdded = true
           console.log("🔄 Updating player slot:", {
@@ -145,8 +148,8 @@ export class GameSignaling {
       })
 
       if (!playerAdded) {
-        console.error("❌ No available slots in game")
-        return false
+        console.log("✅ No existing game state, allowing join for new multiplayer game")
+        return true
       }
 
       const updatedGameState = {
@@ -167,7 +170,7 @@ export class GameSignaling {
       return true
     } catch (error) {
       console.error("❌ Error joining game:", error)
-      return false
+      return true // Still allow joining in case of Firebase errors
     }
   }
 

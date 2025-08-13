@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Gamepad2, Users, Clock, X } from "lucide-react"
+import { useState } from "react"
 
 interface GameInvite {
   id: string
@@ -29,6 +30,8 @@ interface GameInviteNotificationProps {
 }
 
 export function GameInviteNotification({ invite, onAccept, onDecline }: GameInviteNotificationProps) {
+  const [isProcessing, setIsProcessing] = useState(false)
+
   const formatTimeAgo = (timestamp: number) => {
     const seconds = Math.floor((Date.now() - timestamp) / 1000)
     if (seconds < 60) return `${seconds} seconds ago`
@@ -65,6 +68,28 @@ export function GameInviteNotification({ invite, onAccept, onDecline }: GameInvi
     }
   }
 
+  const handleAccept = async () => {
+    setIsProcessing(true)
+    try {
+      await onAccept()
+    } catch (error) {
+      console.error("Error accepting invite:", error)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleDecline = async () => {
+    setIsProcessing(true)
+    try {
+      await onDecline()
+    } catch (error) {
+      console.error("Error declining invite:", error)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
   // Check if invite is expired (5 minutes)
   const isExpired = Date.now() - invite.timestamp > 300000
 
@@ -85,7 +110,8 @@ export function GameInviteNotification({ invite, onAccept, onDecline }: GameInvi
             <Button
               variant="ghost"
               size="sm"
-              onClick={onDecline}
+              onClick={handleDecline}
+              disabled={isProcessing}
               className="h-6 w-6 p-0 text-gray-400 hover:text-white hover:bg-white/10"
               aria-label="Close invitation"
             >
@@ -120,32 +146,35 @@ export function GameInviteNotification({ invite, onAccept, onDecline }: GameInvi
             <div className="text-center">
               <p className="text-red-300 text-sm mb-2">This invitation has expired</p>
               <Button
-                onClick={onDecline}
+                onClick={handleDecline}
                 variant="outline"
                 size="sm"
+                disabled={isProcessing}
                 className="w-full border-red-400/30 text-red-300 hover:bg-red-500/20 hover:text-red-200 bg-transparent"
               >
-                Dismiss
+                {isProcessing ? "Dismissing..." : "Dismiss"}
               </Button>
             </div>
           ) : (
             <div className="flex gap-2">
               <Button
-                onClick={onAccept}
+                onClick={handleAccept}
                 size="sm"
+                disabled={isProcessing}
                 className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white flex-1 border-0"
                 aria-label="Join game"
               >
-                Join Game
+                {isProcessing ? "Joining..." : "Join Game"}
               </Button>
               <Button
-                onClick={onDecline}
+                onClick={handleDecline}
                 variant="outline"
                 size="sm"
+                disabled={isProcessing}
                 className="border-purple-500/30 text-purple-200 hover:bg-purple-500/10 hover:text-white bg-transparent"
                 aria-label="Decline invitation"
               >
-                Decline
+                {isProcessing ? "..." : "Decline"}
               </Button>
             </div>
           )}
