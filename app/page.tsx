@@ -30,6 +30,7 @@ export default function Home() {
   useEffect(() => {
     console.log("App: Current room ID:", currentRoomId)
     console.log("App: Current state:", appState)
+    console.log("App: Database available:", !!database)
   }, [currentRoomId, appState])
 
   useEffect(() => {
@@ -62,6 +63,12 @@ export default function Home() {
 
   const handleCreateRoom = async () => {
     console.log("App: Creating new room")
+
+    if (!database) {
+      setError("Database not available. Please check your Firebase configuration.")
+      return
+    }
+
     setIsCreatingRoom(true)
     setError("")
     setShowProfileModal(true)
@@ -85,7 +92,7 @@ export default function Home() {
 
     try {
       if (!database) {
-        setError("Database not available. Please try again later.")
+        setError("Database not available. Please check your Firebase configuration.")
         setCurrentRoomId("") // Clear on error
         return
       }
@@ -239,6 +246,28 @@ export default function Home() {
 
   // Debug render
   console.log("App: Rendering with state:", { appState, currentRoomId, isCreatingRoom })
+
+  // Show Firebase configuration error if database is not available
+  if (!database) {
+    return (
+      <ThemeProvider>
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+          <div className="text-white text-center max-w-md p-6">
+            <h1 className="text-2xl font-bold mb-4">Configuration Error</h1>
+            <p className="mb-4">Firebase is not properly configured. Please check your environment variables:</p>
+            <ul className="text-left text-sm space-y-1 mb-4">
+              <li>• NEXT_PUBLIC_FIREBASE_PROJECT_ID</li>
+              <li>• NEXT_PUBLIC_FIREBASE_DATABASE_URL</li>
+              <li>• NEXT_PUBLIC_FIREBASE_API_KEY</li>
+              <li>• NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN</li>
+              <li>• NEXT_PUBLIC_FIREBASE_APP_ID</li>
+            </ul>
+            <p className="text-sm text-gray-400">Check the browser console for more details.</p>
+          </div>
+        </div>
+      </ThemeProvider>
+    )
+  }
 
   return (
     <ThemeProvider>
