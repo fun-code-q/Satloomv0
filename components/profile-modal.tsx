@@ -138,14 +138,14 @@ export function ProfileModal({ isOpen, onClose, onSave, defaultProfile }: Profil
 
           <div className="flex gap-4">
             <Button onClick={handleSave} className="bg-cyan-500 hover:bg-cyan-600">
-              ✓ Save
+              Save
             </Button>
             <Button
               onClick={handleSkip}
               variant="outline"
               className="border-slate-600 text-white hover:bg-slate-700 bg-transparent"
             >
-              ▶ Skip
+               Skip
             </Button>
           </div>
         </div>

@@ -1,36 +1,27 @@
 "use client"
-
 import { useState, useEffect, useRef, useCallback } from "react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
-import { Badge } from "@/components/ui/badge"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { TheaterSignaling, type TheaterSession } from "@/utils/theater-signaling"
+import { Slider } from "@/components/ui/slider"
 import {
   Play,
   Pause,
   Volume2,
   VolumeX,
   Maximize,
-  Minimize,
-  Users,
-  Hand,
-  Plus,
   X,
-  ChevronRight,
-  ChevronLeft,
-  SkipForward,
-  SkipBack,
+  Settings,
+  List,
+  Hand,
+  Users,
   Youtube,
   Music,
-  Video,
-  Settings,
-  Subtitles,
-  FastForward,
-  Rewind,
-  RotateCcw,
+  VideoIcon,
+  Film,
+  Plus,
+  Trash2,
 } from "lucide-react"
+import { TheaterSignaling, type TheaterSession, type QueueVideo } from "@/utils/theater-signaling"
+import { Input } from "@/components/ui/input"
 
 interface TheaterFullscreenProps {
   isOpen: boolean
@@ -42,18 +33,20 @@ interface TheaterFullscreenProps {
   isHost: boolean
 }
 
-interface QueueItem {
-  id: string
-  url: string
-  platform: string
-  title: string
-  addedBy: string
-}
-
 interface RaiseHandNotification {
   id: string
   userName: string
   timestamp: number
+}
+
+// Declare global YouTube API
+declare global {
+  interface Window {
+    YT: any
+    onYouTubeIframeAPIReady: () => void
+    Vimeo: any
+    SC: any
+  }
 }
 
 export function TheaterFullscreen({
@@ -70,412 +63,72 @@ export function TheaterFullscreen({
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
-  const [isFullscreen, setIsFullscreen] = useState(false)
   const [showControls, setShowControls] = useState(true)
   const [showQueue, setShowQueue] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const [newVideoUrl, setNewVideoUrl] = useState("")
-  const [queue, setQueue] = useState<QueueItem[]>([])
+  const [queue, setQueue] = useState<QueueVideo[]>([])
   const [raiseHandCount, setRaiseHandCount] = useState(0)
   const [hasRaisedHand, setHasRaisedHand] = useState(false)
   const [raiseHandNotifications, setRaiseHandNotifications] = useState<RaiseHandNotification[]>([])
-  const [quality, setQuality] = useState("auto")
   const [showSubtitles, setShowSubtitles] = useState(false)
   const [youtubePlayer, setYoutubePlayer] = useState<any>(null)
-  const [lastKnownTime, setLastKnownTime] = useState(0)
+  const [vimeoPlayer, setVimeoPlayer] = useState<any>(null)
+  const [playerReady, setPlayerReady] = useState(false)
+  const [currentVideoUrl, setCurrentVideoUrl] = useState(session.videoUrl)
+  const [currentPlatform, setCurrentPlatform] = useState(session.platform)
+  const [soundcloudWidget, setSoundcloudWidget] = useState<any>(null)
 
   const videoRef = useRef<HTMLVideoElement>(null)
+  const youtubePlayerRef = useRef<any>(null)
+  const vimeoPlayerRef = useRef<any>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const youtubeRef = useRef<HTMLIFrameElement>(null)
   const controlsTimeoutRef = useRef<NodeJS.Timeout>()
+  const syncIntervalRef = useRef<NodeJS.Timeout>()
   const theaterSignaling = TheaterSignaling.getInstance()
 
-  // Auto-hide controls after 3 seconds
+  // Auto-hide controls
   const resetControlsTimeout = useCallback(() => {
     if (controlsTimeoutRef.current) {
       clearTimeout(controlsTimeoutRef.current)
     }
     setShowControls(true)
     controlsTimeoutRef.current = setTimeout(() => {
-      if (!showSettings && !showQueue) {
-        setShowControls(false)
-      }
+      setShowControls(false)
     }, 3000)
-  }, [showSettings, showQueue])
+  }, [])
 
-  // Handle mouse movement to show controls
+  // Mouse movement handler
   const handleMouseMove = useCallback(() => {
     resetControlsTimeout()
   }, [resetControlsTimeout])
 
-  // Initialize YouTube player
-  useEffect(() => {
-    if (session.platform === "youtube" && youtubeRef.current) {
-      const script = document.createElement("script")
-      script.src = "https://www.youtube.com/iframe_api"
-      document.head.appendChild(script)
+  // Initialize player based on platform
+  const initializePlayer = useCallback(async () => {
+    if (!session.videoUrl) return
 
-      window.onYouTubeIframeAPIReady = () => {
-        const player = new window.YT.Player(youtubeRef.current, {
-          videoId: session.videoUrl.split("v=")[1]?.split("&")[0],
-          playerVars: {
-            autoplay: 0,
-            controls: 0,
-            disablekb: 1,
-            fs: 0,
-            modestbranding: 1,
-            rel: 0,
-            showinfo: 0,
-            iv_load_policy: 3,
-          },
-          events: {
-            onReady: (event: any) => {
-              setYoutubePlayer(event.target)
-            },
-            onStateChange: (event: any) => {
-              if (event.data === window.YT.PlayerState.PLAYING) {
-                setIsPlaying(true)
-              } else if (event.data === window.YT.PlayerState.PAUSED) {
-                setIsPlaying(false)
-              }
-            },
-          },
-        })
-      }
-
-      return () => {
-        document.head.removeChild(script)
-      }
-    }
-  }, [session.platform, session.videoUrl])
-
-  // Initialize theater session listener
-  useEffect(() => {
-    if (!session) return
-
-    const unsubscribe = theaterSignaling.listenForSession(roomId, session.id, (updatedSession) => {
-      // Update local state based on session changes
-      if (updatedSession.lastAction && updatedSession.lastAction.hostId !== currentUserId) {
-        const action = updatedSession.lastAction
-
-        switch (action.type) {
-          case "play":
-            setIsPlaying(true)
-            setLastKnownTime(action.currentTime || 0)
-
-            if (session.platform === "youtube" && youtubePlayer) {
-              youtubePlayer.seekTo(action.currentTime || 0, true)
-              youtubePlayer.playVideo()
-            } else if (videoRef.current && action.currentTime !== undefined) {
-              videoRef.current.currentTime = action.currentTime
-              videoRef.current.play()
-            }
-            break
-          case "pause":
-            setIsPlaying(false)
-            setLastKnownTime(action.currentTime || 0)
-
-            if (session.platform === "youtube" && youtubePlayer) {
-              youtubePlayer.pauseVideo()
-            } else if (videoRef.current) {
-              videoRef.current.pause()
-            }
-            break
-          case "seek":
-            if (action.currentTime !== undefined) {
-              setCurrentTime(action.currentTime)
-              setLastKnownTime(action.currentTime)
-
-              if (session.platform === "youtube" && youtubePlayer) {
-                youtubePlayer.seekTo(action.currentTime, true)
-              } else if (videoRef.current) {
-                videoRef.current.currentTime = action.currentTime
-              }
-            }
-            break
-          case "raise_hand":
-            // Show raise hand notification
-            const notification: RaiseHandNotification = {
-              id: `hand_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              userName: action.hostName,
-              timestamp: Date.now(),
-            }
-            setRaiseHandNotifications((prev) => [...prev, notification])
-
-            // Remove notification after 5 seconds
-            setTimeout(() => {
-              setRaiseHandNotifications((prev) => prev.filter((n) => n.id !== notification.id))
-            }, 5000)
-            break
-          case "update_queue":
-            if (action.nextVideos) {
-              setQueue(
-                action.nextVideos.map((video: any) => ({
-                  id: video.id,
-                  url: video.url,
-                  platform: video.platform,
-                  title: video.title || "Untitled Video",
-                  addedBy: video.addedBy,
-                })),
-              )
-            }
-            break
-        }
-      }
-
-      // Update raise hand count
-      setRaiseHandCount(updatedSession.raiseHands || 0)
-    })
-
-    return unsubscribe
-  }, [session, roomId, currentUserId, theaterSignaling, youtubePlayer])
-
-  // Video event handlers
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video || session.platform !== "direct") return
-
-    const handleTimeUpdate = () => {
-      setCurrentTime(video.currentTime)
-      setLastKnownTime(video.currentTime)
-    }
-
-    const handleDurationChange = () => {
-      setDuration(video.duration)
-    }
-
-    const handlePlay = () => {
-      setIsPlaying(true)
-    }
-
-    const handlePause = () => {
-      setIsPlaying(false)
-    }
-
-    video.addEventListener("timeupdate", handleTimeUpdate)
-    video.addEventListener("durationchange", handleDurationChange)
-    video.addEventListener("play", handlePlay)
-    video.addEventListener("pause", handlePause)
-
-    return () => {
-      video.removeEventListener("timeupdate", handleTimeUpdate)
-      video.removeEventListener("durationchange", handleDurationChange)
-      video.removeEventListener("play", handlePlay)
-      video.removeEventListener("pause", handlePause)
-    }
-  }, [session.platform])
-
-  // YouTube player time tracking
-  useEffect(() => {
-    if (session.platform === "youtube" && youtubePlayer) {
-      const interval = setInterval(() => {
-        if (youtubePlayer.getCurrentTime) {
-          const time = youtubePlayer.getCurrentTime()
-          setCurrentTime(time)
-          setLastKnownTime(time)
-
-          if (youtubePlayer.getDuration) {
-            setDuration(youtubePlayer.getDuration())
-          }
-        }
-      }, 1000)
-
-      return () => clearInterval(interval)
-    }
-  }, [youtubePlayer, session.platform])
-
-  // Fullscreen handling
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement)
-    }
-
-    document.addEventListener("fullscreenchange", handleFullscreenChange)
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange)
-  }, [])
-
-  // Initialize controls timeout
-  useEffect(() => {
-    resetControlsTimeout()
-    return () => {
-      if (controlsTimeoutRef.current) {
-        clearTimeout(controlsTimeoutRef.current)
-      }
-    }
-  }, [resetControlsTimeout])
-
-  const getCurrentTime = () => {
-    if (session.platform === "youtube" && youtubePlayer?.getCurrentTime) {
-      return youtubePlayer.getCurrentTime()
-    }
-    if (session.platform === "direct" && videoRef.current) {
-      return videoRef.current.currentTime
-    }
-    return lastKnownTime
-  }
-
-  const handlePlayPause = async () => {
-    if (!isHost) return
+    const platform = session.platform || detectPlatform(session.videoUrl)
 
     try {
-      const time = getCurrentTime()
-
-      if (isPlaying) {
-        await theaterSignaling.sendAction(roomId, session.id, "pause", time, currentUserId, currentUser)
-
-        if (session.platform === "youtube" && youtubePlayer) {
-          youtubePlayer.pauseVideo()
-        } else if (videoRef.current) {
-          videoRef.current.pause()
-        }
-        setIsPlaying(false)
-      } else {
-        await theaterSignaling.sendAction(roomId, session.id, "play", time, currentUserId, currentUser)
-
-        if (session.platform === "youtube" && youtubePlayer) {
-          youtubePlayer.seekTo(time, true)
-          youtubePlayer.playVideo()
-        } else if (videoRef.current) {
-          videoRef.current.currentTime = time
-          videoRef.current.play()
-        }
-        setIsPlaying(true)
+      switch (platform) {
+        case "youtube":
+          await initializeYouTubePlayer()
+          break
+        case "vimeo":
+          await initializeVimeoPlayer()
+          break
+        case "soundcloud":
+          await initializeSoundCloudPlayer()
+          break
+        default:
+          initializeDirectPlayer()
+          break
       }
     } catch (error) {
-      console.error("Error sending play/pause action:", error)
+      console.error("Error initializing player:", error)
     }
-  }
-
-  const handleSeek = async (newTime: number) => {
-    if (!isHost) return
-
-    try {
-      await theaterSignaling.sendAction(roomId, session.id, "seek", newTime, currentUserId, currentUser)
-
-      if (session.platform === "youtube" && youtubePlayer) {
-        youtubePlayer.seekTo(newTime, true)
-      } else if (videoRef.current) {
-        videoRef.current.currentTime = newTime
-      }
-      setCurrentTime(newTime)
-      setLastKnownTime(newTime)
-    } catch (error) {
-      console.error("Error sending seek action:", error)
-    }
-  }
-
-  const handleSkip = async (seconds: number) => {
-    if (!isHost) return
-    const newTime = Math.max(0, getCurrentTime() + seconds)
-    handleSeek(newTime)
-  }
-
-  const handleVolumeChange = (newVolume: number) => {
-    setVolume(newVolume)
-    if (session.platform === "youtube" && youtubePlayer) {
-      youtubePlayer.setVolume(newVolume * 100)
-    } else if (videoRef.current) {
-      videoRef.current.volume = newVolume
-    }
-    setIsMuted(newVolume === 0)
-  }
-
-  const handleMuteToggle = () => {
-    if (isMuted) {
-      handleVolumeChange(volume > 0 ? volume : 0.5)
-    } else {
-      handleVolumeChange(0)
-    }
-  }
-
-  const handleFullscreenToggle = () => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen()
-    } else {
-      document.exitFullscreen()
-    }
-  }
-
-  const handleRaiseHand = async () => {
-    if (hasRaisedHand) return
-
-    try {
-      const time = getCurrentTime()
-      await theaterSignaling.sendAction(roomId, session.id, "raise_hand", time, currentUserId, currentUser)
-      setHasRaisedHand(true)
-      setTimeout(() => setHasRaisedHand(false), 3000) // Reset after 3 seconds
-    } catch (error) {
-      console.error("Error raising hand:", error)
-    }
-  }
-
-  const handleAddToQueue = async () => {
-    if (!newVideoUrl.trim() || queue.length >= 3) return
-
-    const platform = detectPlatform(newVideoUrl)
-    const newVideo: QueueItem = {
-      id: `video_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      url: newVideoUrl.trim(),
-      platform,
-      title: `${platform.charAt(0).toUpperCase() + platform.slice(1)} Video`,
-      addedBy: currentUser,
-    }
-
-    const updatedQueue = [...queue, newVideo]
-    setQueue(updatedQueue)
-
-    try {
-      const time = getCurrentTime()
-      await theaterSignaling.sendAction(
-        roomId,
-        session.id,
-        "update_queue",
-        time,
-        currentUserId,
-        currentUser,
-        updatedQueue.map((item) => ({
-          id: item.id,
-          url: item.url,
-          platform: item.platform,
-          title: item.title,
-          addedBy: item.addedBy,
-          addedAt: Date.now(),
-        })),
-      )
-      setNewVideoUrl("")
-    } catch (error) {
-      console.error("Error adding video to queue:", error)
-    }
-  }
-
-  const handleRemoveFromQueue = async (videoId: string) => {
-    if (!isHost) return
-
-    const updatedQueue = queue.filter((item) => item.id !== videoId)
-    setQueue(updatedQueue)
-
-    try {
-      const time = getCurrentTime()
-      await theaterSignaling.sendAction(
-        roomId,
-        session.id,
-        "update_queue",
-        time,
-        currentUserId,
-        currentUser,
-        updatedQueue.map((item) => ({
-          id: item.id,
-          url: item.url,
-          platform: item.platform,
-          title: item.title,
-          addedBy: item.addedBy,
-          addedAt: Date.now(),
-        })),
-      )
-    } catch (error) {
-      console.error("Error removing video from queue:", error)
-    }
-  }
+  }, [session.videoUrl, session.platform])
 
   const detectPlatform = (url: string): string => {
     if (url.match(/(youtube\.com|youtu\.be)/)) return "youtube"
@@ -484,472 +137,718 @@ export function TheaterFullscreen({
     return "direct"
   }
 
+  const extractVideoId = (url: string, platform: string): string => {
+    switch (platform) {
+      case "youtube":
+        const ytRegex = /(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?/\s]{11})/
+        const ytMatch = url.match(ytRegex)
+        return ytMatch ? ytMatch[1] : ""
+      case "vimeo":
+        const vimeoRegex = /(?:vimeo\.com\/|video\/)(\d+)/
+        const vimeoMatch = url.match(vimeoRegex)
+        return vimeoMatch ? vimeoMatch[1] : ""
+      default:
+        return url
+    }
+  }
+
+  const initializeYouTubePlayer = async () => {
+    const videoId = extractVideoId(session.videoUrl, "youtube")
+    if (!videoId) return
+
+    // Load YouTube API if not already loaded
+    if (!(window as any).YT) {
+      const script = document.createElement("script")
+      script.src = "https://www.youtube.com/iframe_api"
+      document.head.appendChild(script)
+
+      await new Promise((resolve) => {
+        ;(window as any).onYouTubeIframeAPIReady = resolve
+      })
+    }
+
+    // Wait for API to be ready
+    if (!(window as any).YT || !(window as any).YT.Player) {
+      setTimeout(() => initializeYouTubePlayer(), 100)
+      return
+    }
+
+    try {
+      youtubePlayerRef.current = new (window as any).YT.Player("youtube-player", {
+        videoId,
+        playerVars: {
+          autoplay: 0,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          modestbranding: 1,
+          rel: 0,
+          enablejsapi: 1,
+        },
+        events: {
+          onReady: (event: any) => {
+            setDuration(event.target.getDuration())
+            setPlayerReady(true)
+          },
+          onStateChange: (event: any) => {
+            const state = event.data
+            if (state === (window as any).YT.PlayerState.PLAYING) {
+              setIsPlaying(true)
+            } else if (state === (window as any).YT.PlayerState.PAUSED) {
+              setIsPlaying(false)
+            }
+          },
+        },
+      })
+    } catch (error) {
+      console.error("Error creating YouTube player:", error)
+    }
+  }
+
+  const initializeVimeoPlayer = async () => {
+    const videoId = extractVideoId(session.videoUrl, "vimeo")
+    if (!videoId) return
+
+    // Load Vimeo Player API
+    if (!(window as any).Vimeo) {
+      const script = document.createElement("script")
+      script.src = "https://player.vimeo.com/api/player.js"
+      document.head.appendChild(script)
+
+      await new Promise((resolve) => {
+        script.onload = resolve
+      })
+    }
+
+    try {
+      const iframe = document.getElementById("vimeo-player") as HTMLIFrameElement
+      if (iframe) {
+        vimeoPlayerRef.current = new (window as any).Vimeo.Player(iframe)
+
+        vimeoPlayerRef.current.on("play", () => setIsPlaying(true))
+        vimeoPlayerRef.current.on("pause", () => setIsPlaying(false))
+        vimeoPlayerRef.current.on("loaded", () => {
+          vimeoPlayerRef.current.getDuration().then((duration: number) => {
+            setDuration(duration)
+            setPlayerReady(true)
+          })
+        })
+
+        vimeoPlayerRef.current.on("timeupdate", (data: any) => {
+          setCurrentTime(data.seconds)
+        })
+      }
+    } catch (error) {
+      console.error("Error creating Vimeo player:", error)
+    }
+  }
+
+  const initializeSoundCloudPlayer = async () => {
+    // SoundCloud widget API
+    if (!(window as any).SC) {
+      const script = document.createElement("script")
+      script.src = "https://w.soundcloud.com/player/api.js"
+      document.head.appendChild(script)
+
+      await new Promise((resolve) => {
+        script.onload = resolve
+      })
+    }
+
+    try {
+      const iframe = document.getElementById("soundcloud-player") as HTMLIFrameElement
+      if (iframe && (window as any).SC) {
+        const widget = (window as any).SC.Widget(iframe)
+        setSoundcloudWidget(widget)
+
+        widget.bind((window as any).SC.Widget.Events.READY, () => {
+          setPlayerReady(true)
+          widget.getDuration((duration: number) => {
+            setDuration(duration / 1000) // Convert to seconds
+          })
+        })
+
+        widget.bind((window as any).SC.Widget.Events.PLAY, () => setIsPlaying(true))
+        widget.bind((window as any).SC.Widget.Events.PAUSE, () => setIsPlaying(false))
+
+        widget.bind((window as any).SC.Widget.Events.PLAY_PROGRESS, (data: any) => {
+          setCurrentTime(data.currentPosition / 1000) // Convert to seconds
+        })
+      }
+    } catch (error) {
+      console.error("Error initializing SoundCloud player:", error)
+    }
+  }
+
+  const initializeDirectPlayer = () => {
+    const video = videoRef.current
+    if (!video) return
+
+    video.src = session.videoUrl
+    video.addEventListener("loadedmetadata", () => {
+      setDuration(video.duration)
+    })
+    video.addEventListener("timeupdate", () => {
+      setCurrentTime(video.currentTime)
+    })
+    video.addEventListener("play", () => setIsPlaying(true))
+    video.addEventListener("pause", () => setIsPlaying(false))
+  }
+
+  // Sync with session updates
+  useEffect(() => {
+    if (!session.lastAction) return
+
+    const action = session.lastAction
+    const timeDiff = Date.now() - action.timestamp
+
+    // Only sync if action is recent (within 5 seconds)
+    if (timeDiff > 5000) return
+
+    switch (action.type) {
+      case "play":
+        handlePlay(false)
+        break
+      case "pause":
+        handlePause(false)
+        break
+      case "seek":
+        if (action.currentTime !== undefined) {
+          handleSeek(action.currentTime, false)
+        }
+        break
+    }
+  }, [session.lastAction])
+
+  // Update queue and raise hands
+  useEffect(() => {
+    setQueue(session.nextVideos || [])
+    setRaiseHandCount(session.raiseHands || 0)
+  }, [session.nextVideos, session.raiseHands])
+
+  const handlePlay = async (sendAction = true) => {
+    if (!playerReady) return
+
+    const platform = session.platform || detectPlatform(session.videoUrl)
+
+    try {
+      switch (platform) {
+        case "youtube":
+          if (youtubePlayerRef.current && youtubePlayerRef.current.playVideo) {
+            youtubePlayerRef.current.playVideo()
+          }
+          break
+        case "vimeo":
+          if (vimeoPlayerRef.current && vimeoPlayerRef.current.play) {
+            await vimeoPlayerRef.current.play()
+          }
+          break
+        case "soundcloud":
+          if (soundcloudWidget && soundcloudWidget.play) {
+            soundcloudWidget.play()
+          }
+          break
+        case "direct":
+          if (videoRef.current) {
+            await videoRef.current.play()
+          }
+          break
+      }
+
+      setIsPlaying(true)
+
+      if (sendAction && isHost) {
+        await theaterSignaling.sendAction(roomId, session.id, "play", currentTime, currentUserId, currentUser)
+      }
+    } catch (error) {
+      console.error("Error playing video:", error)
+    }
+  }
+
+  const handlePause = async (sendAction = true) => {
+    if (!playerReady) return
+
+    const platform = session.platform || detectPlatform(session.videoUrl)
+
+    try {
+      switch (platform) {
+        case "youtube":
+          if (youtubePlayerRef.current && youtubePlayerRef.current.pauseVideo) {
+            youtubePlayerRef.current.pauseVideo()
+          }
+          break
+        case "vimeo":
+          if (vimeoPlayerRef.current && vimeoPlayerRef.current.pause) {
+            await vimeoPlayerRef.current.pause()
+          }
+          break
+        case "soundcloud":
+          if (soundcloudWidget && soundcloudWidget.pause) {
+            soundcloudWidget.pause()
+          }
+          break
+        case "direct":
+          if (videoRef.current) {
+            videoRef.current.pause()
+          }
+          break
+      }
+
+      setIsPlaying(false)
+
+      if (sendAction && isHost) {
+        await theaterSignaling.sendAction(roomId, session.id, "pause", currentTime, currentUserId, currentUser)
+      }
+    } catch (error) {
+      console.error("Error pausing video:", error)
+    }
+  }
+
+  const handleSeek = async (time: number, sendAction = true) => {
+    const platform = session.platform || detectPlatform(session.videoUrl)
+
+    switch (platform) {
+      case "youtube":
+        youtubePlayerRef.current?.seekTo(time)
+        break
+      case "vimeo":
+        vimeoPlayerRef.current?.setCurrentTime(time)
+        break
+      case "soundcloud":
+        if (soundcloudWidget && soundcloudWidget.seekTo) {
+          soundcloudWidget.seekTo(time * 1000) // Convert to milliseconds
+        }
+        break
+      case "direct":
+        if (videoRef.current) {
+          videoRef.current.currentTime = time
+        }
+        break
+    }
+
+    setCurrentTime(time)
+
+    if (sendAction && isHost) {
+      await theaterSignaling.sendAction(roomId, session.id, "seek", time, currentUserId, currentUser)
+    }
+  }
+
+  const handleVolumeChange = (newVolume: number[]) => {
+    const vol = newVolume[0]
+    setVolume(vol)
+    setIsMuted(vol === 0)
+
+    const platform = session.platform || detectPlatform(session.videoUrl)
+
+    switch (platform) {
+      case "youtube":
+        youtubePlayerRef.current?.setVolume(vol * 100)
+        break
+      case "vimeo":
+        vimeoPlayerRef.current?.setVolume(vol)
+        break
+      case "soundcloud":
+        if (soundcloudWidget && soundcloudWidget.setVolume) {
+          soundcloudWidget.setVolume(vol * 100) // SoundCloud expects 0-100
+        }
+        break
+      case "direct":
+        if (videoRef.current) {
+          videoRef.current.volume = vol
+        }
+        break
+    }
+  }
+
+  const handleMute = () => {
+    const newMuted = !isMuted
+    setIsMuted(newMuted)
+
+    const platform = session.platform || detectPlatform(session.videoUrl)
+
+    switch (platform) {
+      case "youtube":
+        if (newMuted) {
+          youtubePlayerRef.current?.mute()
+        } else {
+          youtubePlayerRef.current?.unMute()
+        }
+        break
+      case "vimeo":
+        vimeoPlayerRef.current?.setVolume(newMuted ? 0 : volume)
+        break
+      case "soundcloud":
+        if (soundcloudWidget && soundcloudWidget.setVolume) {
+          soundcloudWidget.setVolume(newMuted ? 0 : volume * 100)
+        }
+        break
+      case "direct":
+        if (videoRef.current) {
+          videoRef.current.muted = newMuted
+        }
+        break
+    }
+  }
+
+  const handleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      containerRef.current
+        ?.requestFullscreen()
+        .then(() => {
+          setIsFullscreen(true)
+        })
+        .catch((err) => {
+          console.error("Error attempting to enable fullscreen:", err)
+        })
+    } else {
+      document
+        .exitFullscreen()
+        .then(() => {
+          setIsFullscreen(false)
+        })
+        .catch((err) => {
+          console.error("Error attempting to exit fullscreen:", err)
+        })
+    }
+  }
+
+  const handleRaiseHand = async () => {
+    await theaterSignaling.sendAction(roomId, session.id, "raise_hand", currentTime, currentUserId, currentUser)
+  }
+
+  const handleAddToQueue = async () => {
+    if (!newVideoUrl.trim() || queue.length >= 3) return
+
+    const platform = detectPlatform(newVideoUrl)
+    const newVideo: QueueVideo = {
+      id: `queue_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      url: newVideoUrl,
+      platform,
+      title: `${platform.charAt(0).toUpperCase() + platform.slice(1)} Video`,
+      addedBy: currentUser,
+      addedAt: Date.now(),
+    }
+
+    const updatedQueue = [...queue, newVideo]
+    await theaterSignaling.sendAction(
+      roomId,
+      session.id,
+      "update_queue",
+      currentTime,
+      currentUserId,
+      currentUser,
+      updatedQueue,
+    )
+
+    setNewVideoUrl("")
+  }
+
+  const handleRemoveFromQueue = async (videoId: string) => {
+    if (!isHost) return
+
+    const updatedQueue = queue.filter((video) => video.id !== videoId)
+    await theaterSignaling.sendAction(
+      roomId,
+      session.id,
+      "update_queue",
+      currentTime,
+      currentUserId,
+      currentUser,
+      updatedQueue,
+    )
+  }
+
   const getPlatformIcon = (platform: string) => {
     switch (platform) {
       case "youtube":
         return <Youtube className="w-4 h-4 text-red-500" />
       case "vimeo":
-        return <Video className="w-4 h-4 text-blue-500" />
+        return <VideoIcon className="w-4 h-4 text-blue-500" />
       case "soundcloud":
         return <Music className="w-4 h-4 text-orange-500" />
       default:
-        return <Video className="w-4 h-4 text-gray-500" />
+        return <Film className="w-4 h-4 text-green-500" />
     }
   }
 
-  const formatTime = (time: number) => {
-    const minutes = Math.floor(time / 60)
-    const seconds = Math.floor(time % 60)
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs.toString().padStart(2, "0")}`
   }
+
+  const copyRoomLink = () => {
+    const roomLink = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(roomId)}`
+    navigator.clipboard.writeText(roomLink).then(() => {
+      // Show notification
+    })
+  }
+
+  // Initialize player on mount
+  useEffect(() => {
+    if (isOpen && session.videoUrl) {
+      const initPlayer = async () => {
+        setPlayerReady(false)
+        await initializePlayer()
+        setPlayerReady(true)
+      }
+      initPlayer()
+    }
+
+    return () => {
+      // Cleanup players
+      if (youtubePlayerRef.current) {
+        youtubePlayerRef.current.destroy()
+        youtubePlayerRef.current = null
+      }
+      if (vimeoPlayerRef.current) {
+        vimeoPlayerRef.current.destroy()
+        vimeoPlayerRef.current = null
+      }
+      if (soundcloudWidget) {
+        setSoundcloudWidget(null)
+      }
+    }
+  }, [isOpen, session.videoUrl])
+
+  // Set up mouse move listener
+  useEffect(() => {
+    if (isOpen) {
+      resetControlsTimeout()
+      document.addEventListener("mousemove", handleMouseMove)
+      return () => {
+        document.removeEventListener("mousemove", handleMouseMove)
+        if (controlsTimeoutRef.current) {
+          clearTimeout(controlsTimeoutRef.current)
+        }
+      }
+    }
+  }, [isOpen, handleMouseMove, resetControlsTimeout])
+
+  // Add fullscreen change listener
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement)
+    }
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange)
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange)
+    }
+  }, [])
 
   if (!isOpen) return null
 
+  const platform = session.platform || detectPlatform(session.videoUrl)
+  const videoId = extractVideoId(session.videoUrl, platform)
+
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-none w-full h-full p-0 bg-black border-none">
-        <DialogTitle className="sr-only">Theater Mode - {session.videoUrl}</DialogTitle>
-        <DialogDescription className="sr-only">
-          Watch videos together in theater mode. Host can control playback, and all participants can see the same
-          content in real-time.
-        </DialogDescription>
-
-        <div
-          ref={containerRef}
-          className="relative w-full h-full bg-black overflow-hidden"
-          onMouseMove={handleMouseMove}
-        >
+    <div
+      ref={containerRef}
+      className="fixed inset-0 z-50 bg-gradient-to-br from-slate-900 via-purple-900/20 to-slate-900"
+      onMouseMove={handleMouseMove}
+    >
+      {/* Video Container */}
+      <div className="relative w-full h-full flex items-center justify-center">
+        <div className="relative w-full max-w-6xl mx-auto bg-black/50 backdrop-blur-sm rounded-2xl overflow-hidden shadow-2xl border border-white/10">
           {/* Video Player */}
-          <div className="relative w-full h-full flex items-center justify-center">
-            {session.platform === "youtube" ? (
-              <div className="w-full h-full">
-                <iframe
-                  ref={youtubeRef}
-                  className="w-full h-full"
-                  frameBorder="0"
-                  allow="autoplay; encrypted-media"
-                  allowFullScreen
-                />
-              </div>
-            ) : session.platform === "vimeo" ? (
-              <div className="w-full h-full">
-                <iframe
-                  src={`https://player.vimeo.com/video/${session.videoUrl.split("/").pop()}?autoplay=${isPlaying ? 1 : 0}&controls=0&title=0&byline=0&portrait=0`}
-                  className="w-full h-full"
-                  frameBorder="0"
-                  allow="autoplay; fullscreen"
-                  allowFullScreen
-                />
-              </div>
-            ) : session.platform === "soundcloud" ? (
-              <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-orange-900 to-orange-600">
-                <div className="w-full max-w-4xl px-8">
-                  <iframe
-                    width="100%"
-                    height="300"
-                    scrolling="no"
-                    frameBorder="no"
-                    allow="autoplay"
-                    src={`https://w.soundcloud.com/player/?url=${encodeURIComponent(session.videoUrl)}&color=%23ff5500&auto_play=${isPlaying}&hide_related=false&show_comments=true&show_user=true&show_reposts=false&show_teaser=true&visual=true`}
-                  />
-                  <div className="mt-8 text-center">
-                    <Music className="w-16 h-16 mx-auto mb-4 text-white/80" />
-                    <h3 className="text-2xl font-bold text-white mb-2">SoundCloud Audio</h3>
-                    <p className="text-white/80">Enjoying music together</p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <video
-                ref={videoRef}
-                src={session.videoUrl}
-                className="w-full h-full object-contain"
-                crossOrigin="anonymous"
+          <div className="relative aspect-video bg-black">
+            {platform === "youtube" && <div id="youtube-player" className="w-full h-full" />}
+
+            {platform === "vimeo" && (
+              <iframe
+                id="vimeo-player"
+                src={`https://player.vimeo.com/video/${videoId}?background=1&autoplay=0&loop=0&byline=0&title=0&portrait=0&controls=0`}
+                className="w-full h-full"
+                frameBorder="0"
+                allow="autoplay; fullscreen"
               />
             )}
 
-            {/* Click blocker for non-hosts */}
-            {!isHost && (
-              <div
-                className="absolute inset-0 bg-transparent cursor-not-allowed"
-                title="Only the host can control playback"
+            {platform === "soundcloud" && (
+              <iframe
+                id="soundcloud-player"
+                src={`https://w.soundcloud.com/player/?url=${encodeURIComponent(session.videoUrl)}&auto_play=false&hide_related=true&show_comments=false&show_user=false&show_reposts=false&show_teaser=false&visual=true&enable_api=true`}
+                className="w-full h-full"
+                frameBorder="0"
+                allow="autoplay"
               />
             )}
-          </div>
 
-          {/* Raise Hand Notifications */}
-          <div className="absolute top-20 right-4 space-y-2 z-50">
-            {raiseHandNotifications.map((notification) => (
-              <div
-                key={notification.id}
-                className="bg-yellow-500/90 text-black px-4 py-2 rounded-lg shadow-lg animate-in slide-in-from-right-full duration-300"
-              >
-                <div className="flex items-center gap-2">
-                  <Hand className="w-4 h-4" />
-                  <span className="font-medium">{notification.userName} raised hand!</span>
-                </div>
-              </div>
-            ))}
+            {platform === "direct" && (
+              <video ref={videoRef} className="w-full h-full object-contain" controls={false} />
+            )}
           </div>
 
           {/* Controls Overlay */}
           <div
-            className={`absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-black/60 transition-opacity duration-300 ${
+            className={`absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 transition-opacity duration-300 ${
               showControls ? "opacity-100" : "opacity-0"
             }`}
           >
-            {/* Top Bar */}
-            <div className="absolute top-0 left-0 right-0 p-6 flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-3 bg-black/40 rounded-lg px-3 py-2 backdrop-blur-sm">
-                  {getPlatformIcon(session.platform || "direct")}
-                  <span className="text-white font-medium">
-                    {session.platform?.charAt(0).toUpperCase() + session.platform?.slice(1)} Video
-                  </span>
+            {/* Top Controls */}
+            <div className="absolute top-0 left-0 right-0 p-4 flex items-center justify-between">
+              <div className="flex items-center gap-4 text-white">
+                <div className="flex items-center gap-2">
+                  {getPlatformIcon(platform)}
+                  <span className="text-sm font-medium">{platform.charAt(0).toUpperCase() + platform.slice(1)}</span>
                 </div>
-
-                <Badge variant="secondary" className="bg-white/20 text-white backdrop-blur-sm">
-                  <Users className="w-3 h-3 mr-1" />
-                  {session.participants.length}
-                </Badge>
-
-                {raiseHandCount > 0 && (
-                  <Badge variant="secondary" className="bg-yellow-500/30 text-yellow-200 backdrop-blur-sm">
-                    <Hand className="w-3 h-3 mr-1" />
-                    {raiseHandCount}
-                  </Badge>
-                )}
-
+                <div className="flex items-center gap-1">
+                  <Users className="w-4 h-4" />
+                  <span className="text-sm">{session.participants.length}</span>
+                </div>
                 {queue.length > 0 && (
-                  <Badge variant="secondary" className="bg-blue-500/30 text-blue-200 backdrop-blur-sm">
-                    Queue: {queue.length}/3
-                  </Badge>
+                  <div className="flex items-center gap-1">
+                    <List className="w-4 h-4" />
+                    <span className="text-sm">Queue: {queue.length}</span>
+                  </div>
                 )}
               </div>
 
               <div className="flex items-center gap-2">
+                {/* Raise Hand Button - moved to controls section */}
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  className="text-white hover:bg-white/20 backdrop-blur-sm rounded-lg"
+                  onClick={handleRaiseHand}
+                  className="bg-yellow-500/80 hover:bg-yellow-500 text-black backdrop-blur-sm"
+                  size="sm"
+                >
+                  <Hand className="w-4 h-4 mr-1" />
+                  {raiseHandCount > 0 && raiseHandCount}
+                </Button>
+
+                <Button
                   onClick={() => setShowSettings(!showSettings)}
+                  variant="ghost"
+                  size="sm"
+                  className="text-white hover:bg-white/20"
                 >
                   <Settings className="w-4 h-4" />
                 </Button>
-
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  className="text-white hover:bg-white/20 backdrop-blur-sm rounded-lg"
                   onClick={() => setShowQueue(!showQueue)}
-                >
-                  {showQueue ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-                </Button>
-
-                <Button
                   variant="ghost"
-                  size="icon"
-                  className="text-white hover:bg-white/20 backdrop-blur-sm rounded-lg"
-                  onClick={handleFullscreenToggle}
+                  size="sm"
+                  className="text-white hover:bg-white/20"
                 >
-                  {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                  <List className="w-4 h-4" />
                 </Button>
-
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="text-white hover:bg-white/20 backdrop-blur-sm rounded-lg"
-                  onClick={onClose}
-                >
+                <Button onClick={handleFullscreen} variant="ghost" size="sm" className="text-white hover:bg-white/20">
+                  <Maximize className="w-4 h-4" />
+                </Button>
+                <Button onClick={onClose} variant="ghost" size="sm" className="text-white hover:bg-white/20">
                   <X className="w-4 h-4" />
                 </Button>
               </div>
             </div>
 
-            {/* Settings Panel */}
-            {showSettings && (
-              <div className="absolute top-16 right-4 w-64 bg-black/90 backdrop-blur-sm rounded-lg border border-white/20 p-4 z-40">
-                <h3 className="text-white font-medium mb-3">Video Settings</h3>
-
-                {session.platform === "youtube" && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="text-white text-sm mb-1 block">Quality</label>
-                      <Select value={quality} onValueChange={setQuality}>
-                        <SelectTrigger className="bg-white/10 border-white/20 text-white">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="bg-gray-900 border-gray-600">
-                          <SelectItem value="auto">Auto</SelectItem>
-                          <SelectItem value="1080p">1080p</SelectItem>
-                          <SelectItem value="720p">720p</SelectItem>
-                          <SelectItem value="480p">480p</SelectItem>
-                          <SelectItem value="360p">360p</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="subtitles"
-                        checked={showSubtitles}
-                        onChange={(e) => setShowSubtitles(e.target.checked)}
-                        className="rounded"
-                      />
-                      <label htmlFor="subtitles" className="text-white text-sm flex items-center gap-1">
-                        <Subtitles className="w-4 h-4" />
-                        Subtitles
-                      </label>
-                    </div>
-                  </div>
-                )}
-
-                {session.platform === "direct" && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <input
-                        type="checkbox"
-                        id="subtitles"
-                        checked={showSubtitles}
-                        onChange={(e) => setShowSubtitles(e.target.checked)}
-                        className="rounded"
-                      />
-                      <label htmlFor="subtitles" className="text-white text-sm flex items-center gap-1">
-                        <Subtitles className="w-4 h-4" />
-                        Subtitles
-                      </label>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* Bottom Controls */}
-            <div className="absolute bottom-0 left-0 right-0 p-6">
+            <div className="absolute bottom-0 left-0 right-0 p-4">
               {/* Progress Bar */}
-              {(session.platform === "direct" || session.platform === "youtube") && duration > 0 && (
-                <div className="mb-6">
-                  <div className="relative w-full h-2 bg-white/20 rounded-full cursor-pointer group">
-                    <div
-                      className="absolute top-0 left-0 h-full bg-red-500 rounded-full transition-all"
-                      style={{ width: `${(currentTime / duration) * 100}%` }}
-                    />
-                    <input
-                      type="range"
-                      min="0"
-                      max={duration}
-                      value={currentTime}
-                      onChange={(e) => handleSeek(Number(e.target.value))}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                      disabled={!isHost}
-                    />
-                    <div
-                      className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                      style={{ left: `calc(${(currentTime / duration) * 100}% - 8px)` }}
-                    />
-                  </div>
-                  <div className="flex justify-between text-sm text-white/80 mt-2">
-                    <span>{formatTime(currentTime)}</span>
-                    <span>{formatTime(duration)}</span>
-                  </div>
+              <div className="mb-4">
+                <Slider
+                  value={[currentTime]}
+                  max={duration}
+                  step={1}
+                  onValueChange={(value) => isHost && handleSeek(value[0])}
+                  className="w-full"
+                  disabled={!isHost}
+                />
+                <div className="flex justify-between text-xs text-white/70 mt-1">
+                  <span>{formatTime(currentTime)}</span>
+                  <span>{formatTime(duration)}</span>
                 </div>
-              )}
+              </div>
 
               {/* Control Buttons */}
-              <div className="flex items-center justify-center gap-6">
-                {/* Left Controls */}
-                <div className="flex items-center gap-4">
-                  {isHost && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-white hover:bg-white/20 backdrop-blur-sm rounded-full w-12 h-12"
-                        onClick={() => handleSkip(-10)}
-                      >
-                        <Rewind className="w-5 h-5" />
-                      </Button>
-
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-white hover:bg-white/20 backdrop-blur-sm rounded-full w-12 h-12"
-                        onClick={() => handleSkip(-5)}
-                      >
-                        <SkipBack className="w-5 h-5" />
-                      </Button>
-                    </>
-                  )}
-
-                  {/* Play/Pause Button */}
-                  {isHost ? (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-white hover:bg-white/30 backdrop-blur-sm rounded-full w-16 h-16 bg-white/10"
-                      onClick={handlePlayPause}
-                    >
-                      {isPlaying ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8 ml-1" />}
-                    </Button>
-                  ) : (
-                    <div className="w-16 h-16 flex items-center justify-center text-white/50 bg-white/10 rounded-full backdrop-blur-sm">
-                      {isPlaying ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8 ml-1" />}
-                    </div>
-                  )}
-
-                  {isHost && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-white hover:bg-white/20 backdrop-blur-sm rounded-full w-12 h-12"
-                        onClick={() => handleSkip(5)}
-                      >
-                        <SkipForward className="w-5 h-5" />
-                      </Button>
-
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-white hover:bg-white/20 backdrop-blur-sm rounded-full w-12 h-12"
-                        onClick={() => handleSkip(10)}
-                      >
-                        <FastForward className="w-5 h-5" />
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Bottom Row Controls */}
-              <div className="flex items-center justify-between mt-6">
-                {/* Volume Controls */}
-                <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center gap-4">
+                {isHost ? (
                   <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-white hover:bg-white/20 backdrop-blur-sm rounded-lg"
-                    onClick={handleMuteToggle}
+                    onClick={() => (isPlaying ? handlePause() : handlePlay())}
+                    className="bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm"
+                    size="lg"
                   >
-                    {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                    {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
                   </Button>
-                  <div className="w-24 flex items-center">
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.1"
-                      value={isMuted ? 0 : volume}
-                      onChange={(e) => handleVolumeChange(Number(e.target.value))}
-                      className="w-full h-1 bg-white/20 rounded-lg appearance-none slider"
-                    />
+                ) : (
+                  <div className="text-white/70 text-sm">
+                    {isPlaying ? "Playing" : "Paused"} • Host controls playback
                   </div>
-                </div>
+                )}
 
-                {/* Right Controls */}
-                <div className="flex items-center gap-3">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={`text-white hover:bg-white/20 backdrop-blur-sm rounded-lg transition-all ${hasRaisedHand ? "bg-yellow-500/30 text-yellow-200" : ""}`}
-                    onClick={handleRaiseHand}
-                    disabled={hasRaisedHand}
-                  >
-                    <Hand className="w-5 h-5" />
+                <div className="flex items-center gap-2">
+                  <Button onClick={handleMute} variant="ghost" size="sm" className="text-white hover:bg-white/20">
+                    {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                   </Button>
-
-                  {queue.length > 0 && isHost && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-white hover:bg-white/20 backdrop-blur-sm rounded-lg"
-                    >
-                      <RotateCcw className="w-5 h-5" />
-                    </Button>
-                  )}
+                  <Slider
+                    value={[isMuted ? 0 : volume]}
+                    max={1}
+                    step={0.1}
+                    onValueChange={handleVolumeChange}
+                    className="w-20"
+                  />
                 </div>
               </div>
             </div>
           </div>
+        </div>
 
-          {/* Queue Panel */}
-          {showQueue && (
-            <div className="absolute top-0 right-0 w-80 h-full bg-black/95 backdrop-blur-sm border-l border-white/20 overflow-y-auto z-30">
-              <div className="p-4">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-white font-medium">Queue ({queue.length}/3)</h3>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-white hover:bg-white/20 rounded-lg"
-                    onClick={() => setShowQueue(false)}
-                  >
-                    <X className="w-4 h-4" />
-                  </Button>
-                </div>
+        {/* Queue Panel */}
+        {showQueue && (
+          <div className="absolute right-4 top-1/2 -translate-y-1/2 w-80 bg-black/80 backdrop-blur-sm rounded-xl p-4 border border-white/10">
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <List className="w-4 h-4" />
+              Queue ({queue.length}/3)
+            </h3>
 
-                {/* Add Video */}
-                <div className="mb-4">
-                  <div className="flex gap-2">
-                    <Input
-                      value={newVideoUrl}
-                      onChange={(e) => setNewVideoUrl(e.target.value)}
-                      placeholder="Paste video URL..."
-                      className="bg-white/10 border-white/20 text-white placeholder-white/50 rounded-lg"
-                      disabled={queue.length >= 3}
-                    />
-                    <Button
-                      onClick={handleAddToQueue}
-                      disabled={!newVideoUrl.trim() || queue.length >= 3}
-                      className="bg-blue-500 hover:bg-blue-600 rounded-lg"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </Button>
-                  </div>
-                  {queue.length >= 3 && <p className="text-yellow-400 text-xs mt-1">Queue is full (max 3 videos)</p>}
-                </div>
-
-                {/* Queue Items */}
-                <div className="space-y-2">
-                  {queue.map((item, index) => (
-                    <div key={item.id} className="bg-white/10 rounded-lg p-3 hover:bg-white/20 transition-colors">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            {getPlatformIcon(item.platform)}
-                            <span className="text-white text-sm font-medium truncate">{item.title}</span>
-                          </div>
-                          <p className="text-white/70 text-xs">Added by {item.addedBy}</p>
-                          <p className="text-white/50 text-xs truncate">{item.url}</p>
-                        </div>
-                        {isHost && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="text-white/70 hover:text-white hover:bg-white/20 ml-2 rounded-lg"
-                            onClick={() => handleRemoveFromQueue(item.id)}
-                          >
-                            <X className="w-3 h-3" />
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-
-                  {queue.length === 0 && (
-                    <div className="text-center text-white/50 py-8">
-                      <Video className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                      <p>No videos in queue</p>
-                      <p className="text-xs">Add videos to watch next</p>
-                    </div>
-                  )}
-                </div>
+            {/* Add to Queue */}
+            <div className="mb-4">
+              <div className="flex gap-2">
+                <Input
+                  value={newVideoUrl}
+                  onChange={(e) => setNewVideoUrl(e.target.value)}
+                  placeholder="Paste video URL..."
+                  className="bg-white/10 border-white/20 text-white placeholder-white/50"
+                  disabled={queue.length >= 3}
+                />
+                <Button
+                  onClick={handleAddToQueue}
+                  disabled={!newVideoUrl.trim() || queue.length >= 3}
+                  size="sm"
+                  className="bg-purple-500 hover:bg-purple-600"
+                >
+                  <Plus className="w-4 h-4" />
+                </Button>
               </div>
             </div>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+
+            {/* Queue List */}
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {queue.map((video, index) => (
+                <div key={video.id} className="flex items-center gap-3 p-2 bg-white/5 rounded-lg">
+                  <div className="flex items-center gap-2 flex-1">
+                    {getPlatformIcon(video.platform)}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white text-sm truncate">{video.title}</div>
+                      <div className="text-white/50 text-xs">Added by {video.addedBy}</div>
+                    </div>
+                  </div>
+                  {isHost && (
+                    <Button
+                      onClick={() => handleRemoveFromQueue(video.id)}
+                      variant="ghost"
+                      size="sm"
+                      className="text-red-400 hover:text-red-300 hover:bg-red-500/20"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+              {queue.length === 0 && <div className="text-white/50 text-center py-4">No videos in queue</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }

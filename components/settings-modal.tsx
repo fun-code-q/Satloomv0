@@ -21,9 +21,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-md">
+      <DialogContent
+        className={`border max-w-md transition-colors ${
+          theme === "dark" ? "bg-slate-800 border-slate-700 text-white" : "bg-white border-gray-200 text-gray-900"
+        }`}
+      >
         <DialogHeader>
-          <DialogTitle className="text-center text-cyan-400 flex items-center justify-center gap-2">
+          <DialogTitle
+            className={`text-center flex items-center justify-center gap-2 ${
+              theme === "dark" ? "text-cyan-400" : "text-blue-600"
+            }`}
+          >
             <Settings className="w-5 h-5" />
             Settings
           </DialogTitle>
@@ -32,20 +40,30 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         <div className="space-y-6 py-4">
           {/* Theme */}
           <div className="flex items-center justify-between">
-            <span className="text-white">Theme:</span>
-            <Button onClick={toggleTheme} className="bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg">
-              {theme === "dark" ? " Switch to Light" : " Switch to Dark"}
+            <span className={`${theme === "dark" ? "text-white" : "text-gray-900"}`}>Theme:</span>
+            <Button
+              onClick={toggleTheme}
+              className={`px-4 py-2 rounded-lg transition-colors ${
+                theme === "dark"
+                  ? "bg-cyan-500 hover:bg-cyan-600 text-white"
+                  : "bg-blue-500 hover:bg-blue-600 text-white"
+              }`}
+            >
+              {theme === "dark" ? "Dark Mode" : "Light Mode"}
             </Button>
           </div>
 
           {/* Notifications */}
           <div className="flex items-center justify-between">
-            <span className="text-white">Notifications:</span>
+            <span className={`${theme === "dark" ? "text-white" : "text-gray-900"}`}>Notifications:</span>
             <button
               onClick={toggleNotifications}
               className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                notifications ? "bg-cyan-500" : "bg-gray-600"
+                notifications ? (theme === "dark" ? "bg-cyan-500" : "bg-blue-500") : "bg-gray-600"
               }`}
+              aria-pressed={notifications}
+              role="switch"
+              aria-label={`Notifications ${notifications ? "enabled" : "disabled"}`}
             >
               <span
                 className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -57,12 +75,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
           {/* Notification Sound */}
           <div className="flex items-center justify-between">
-            <span className="text-white">Notification Sound:</span>
+            <span className={`${theme === "dark" ? "text-white" : "text-gray-900"}`}>Notification Sound:</span>
             <button
               onClick={toggleNotificationSound}
               className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                notificationSound ? "bg-cyan-500" : "bg-gray-600"
+                notificationSound ? (theme === "dark" ? "bg-cyan-500" : "bg-blue-500") : "bg-gray-600"
               }`}
+              aria-pressed={notificationSound}
+              role="switch"
+              aria-label={`Notification sound ${notificationSound ? "enabled" : "disabled"}`}
             >
               <span
                 className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -73,22 +94,35 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
 
           {/* Debug Mode */}
-          <div className="flex items-center justify-between">
-            <span className="text-white">Debug Mode:</span>
-            <button className="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-600">
+          <div className="flex items-center justify-between opacity-50">
+            <span className={`${theme === "dark" ? "text-white" : "text-gray-900"}`}>Debug Mode:</span>
+            <button
+              className="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-600 cursor-not-allowed"
+              disabled
+              title="Coming soon"
+            >
               <span className="inline-block h-4 w-4 transform rounded-full bg-white translate-x-1" />
             </button>
           </div>
         </div>
 
         <div className="flex gap-4 justify-center pt-4">
-          <Button onClick={handleSaveSettings} className="bg-cyan-500 hover:bg-cyan-600">
+          <Button
+            onClick={handleSaveSettings}
+            className={`transition-colors ${
+              theme === "dark" ? "bg-cyan-500 hover:bg-cyan-600" : "bg-blue-500 hover:bg-blue-600"
+            } text-white`}
+          >
             Save Settings
           </Button>
           <Button
             onClick={onClose}
             variant="outline"
-            className="border-slate-600 text-white hover:bg-slate-700 bg-transparent"
+            className={`transition-colors ${
+              theme === "dark"
+                ? "border-slate-600 text-white hover:bg-slate-700 bg-transparent"
+                : "border-gray-300 text-gray-700 hover:bg-gray-50 bg-transparent"
+            }`}
           >
             Close
           </Button>

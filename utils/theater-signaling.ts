@@ -1,5 +1,5 @@
 import { database } from "@/lib/firebase"
-import { ref, set, onValue, update, remove } from "firebase/database"
+import { ref, set, onValue, update, remove, get } from "firebase/database"
 
 export interface TheaterSession {
   id: string
@@ -13,18 +13,29 @@ export interface TheaterSession {
   currentTime: number
   lastAction?: TheaterAction
   createdAt: number
-  nextVideos?: string[]
-  raiseHands?: number
-  platform?: string
+  nextVideos: QueueVideo[]
+  raiseHands: number
+  platform: string
+  hostActive: boolean
+}
+
+export interface QueueVideo {
+  id: string
+  url: string
+  platform: string
+  title: string
+  addedBy: string
+  addedAt: number
 }
 
 export interface TheaterAction {
-  type: "play" | "pause" | "seek" | "raise_hand" | "update_queue"
+  type: "play" | "pause" | "seek" | "raise_hand" | "update_queue" | "load_video"
   currentTime?: number
   hostId: string
   hostName: string
   timestamp: number
-  nextVideos?: string[]
+  nextVideos?: QueueVideo[]
+  videoUrl?: string
 }
 
 export interface TheaterInvite {
@@ -59,6 +70,22 @@ export class TheaterSignaling {
     return "unknown"
   }
 
+  // Extract video ID from URL
+  private extractVideoId(url: string, platform: string): string {
+    switch (platform) {
+      case "youtube":
+        const ytRegex = /(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?/\s]{11})/
+        const ytMatch = url.match(ytRegex)
+        return ytMatch ? ytMatch[1] : url
+      case "vimeo":
+        const vimeoRegex = /(?:vimeo\.com\/|video\/)(\d+)/
+        const vimeoMatch = url.match(vimeoRegex)
+        return vimeoMatch ? vimeoMatch[1] : url
+      default:
+        return url
+    }
+  }
+
   // Clean data to remove undefined values
   private cleanData(obj: any): any {
     if (obj === null || obj === undefined) return null
@@ -76,25 +103,6 @@ export class TheaterSignaling {
       return cleaned
     }
     return obj
-  }
-
-  // Helper method to get a single snapshot from Firebase
-  private getSnapshot(ref: any): Promise<any> {
-    return new Promise((resolve, reject) => {
-      let unsubscribe: (() => void) | null = null
-
-      unsubscribe = onValue(
-        ref,
-        (snapshot) => {
-          if (unsubscribe) unsubscribe()
-          resolve(snapshot)
-        },
-        (error) => {
-          if (unsubscribe) unsubscribe()
-          reject(error)
-        },
-      )
-    })
   }
 
   async createSession(
@@ -125,6 +133,7 @@ export class TheaterSignaling {
       createdAt: Date.now(),
       nextVideos: [],
       raiseHands: 0,
+      hostActive: true,
     }
 
     const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
@@ -140,14 +149,14 @@ export class TheaterSignaling {
     const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
 
     try {
-      const sessionSnapshot = await this.getSnapshot(sessionRef)
+      const snapshot = await get(sessionRef)
 
-      if (!sessionSnapshot.exists()) {
+      if (!snapshot.exists()) {
         return false
       }
 
-      const session = sessionSnapshot.val()
-      if (session.status === "ended") {
+      const session = snapshot.val()
+      if (session.status === "ended" || !session.hostActive) {
         return false
       }
 
@@ -172,13 +181,13 @@ export class TheaterSignaling {
     const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
 
     try {
-      const sessionSnapshot = await this.getSnapshot(sessionRef)
+      const snapshot = await get(sessionRef)
 
-      if (!sessionSnapshot.exists()) {
+      if (!snapshot.exists()) {
         return
       }
 
-      const session = sessionSnapshot.val()
+      const session = snapshot.val()
       const updatedParticipants = session.participants.filter((id: string) => id !== userId)
 
       if (updatedParticipants.length === 0) {
@@ -201,13 +210,13 @@ export class TheaterSignaling {
     currentTime: number,
     hostId: string,
     hostName: string,
-    nextVideos?: string[],
+    nextVideos?: QueueVideo[],
+    videoUrl?: string,
   ): Promise<void> {
     if (!database) return
 
     const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
 
-    // Create base action object
     const action: TheaterAction = {
       type,
       currentTime,
@@ -216,9 +225,12 @@ export class TheaterSignaling {
       timestamp: Date.now(),
     }
 
-    // Only add nextVideos if it's provided and not undefined
     if (nextVideos !== undefined) {
       action.nextVideos = nextVideos
+    }
+
+    if (videoUrl !== undefined) {
+      action.videoUrl = videoUrl
     }
 
     const updateData: any = {
@@ -233,18 +245,23 @@ export class TheaterSignaling {
     } else if (type === "raise_hand") {
       // Increment raise hand count
       try {
-        const sessionSnapshot = await this.getSnapshot(sessionRef)
-
-        if (sessionSnapshot.exists()) {
-          const session = sessionSnapshot.val()
+        const snapshot = await get(sessionRef)
+        if (snapshot.exists()) {
+          const session = snapshot.val()
           updateData.raiseHands = (session.raiseHands || 0) + 1
+        } else {
+          updateData.raiseHands = 1
         }
       } catch (error) {
         console.error("Error getting session for raise hand:", error)
-        updateData.raiseHands = 1 // Default to 1 if we can't get current count
+        updateData.raiseHands = 1
       }
     } else if (type === "update_queue" && nextVideos !== undefined) {
       updateData.nextVideos = nextVideos
+    } else if (type === "load_video" && videoUrl !== undefined) {
+      updateData.videoUrl = videoUrl
+      updateData.platform = this.detectPlatform(videoUrl)
+      updateData.status = "loading"
     }
 
     await update(sessionRef, this.cleanData(updateData))
@@ -293,6 +310,7 @@ export class TheaterSignaling {
       sessionRef,
       this.cleanData({
         status: "ended",
+        hostActive: false,
         lastAction: endAction,
       }),
     )
@@ -328,7 +346,7 @@ export class TheaterSignaling {
         callback(session)
 
         // If session ended, notify all participants
-        if (session.status === "ended") {
+        if (session.status === "ended" || !session.hostActive) {
           setTimeout(() => {
             callback({ ...session, status: "ended" })
           }, 1000)
@@ -385,7 +403,7 @@ export class TheaterSignaling {
     const sessionsRef = ref(database, `rooms/${roomId}/theater`)
 
     try {
-      const snapshot = await this.getSnapshot(sessionsRef)
+      const snapshot = await get(sessionsRef)
 
       if (!snapshot.exists()) {
         return null
@@ -399,7 +417,7 @@ export class TheaterSignaling {
           ...session,
           id,
         }))
-        .filter((session: any) => session.status !== "ended")
+        .filter((session: any) => session.status !== "ended" && session.hostActive)
         .sort((a: any, b: any) => b.createdAt - a.createdAt)
 
       return activeSessions.length > 0 ? activeSessions[0] : null
