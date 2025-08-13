@@ -62,8 +62,10 @@ export class GameSignaling {
         gameId,
         roomId,
         currentPlayerIndex: gameState.currentPlayerIndex,
+        currentPlayer: gameState.players[gameState.currentPlayerIndex]?.name,
         gameStatus: gameState.gameStatus,
         lastMoveTimestamp: gameState.lastMove?.timestamp,
+        players: gameState.players.map((p) => ({ id: p.id, name: p.name, isPlaceholder: p.isPlaceholder })),
         firebasePath: `multiplayer-games/${roomId}/${gameId}`,
       })
 
@@ -90,6 +92,7 @@ export class GameSignaling {
         roomId,
         move: `${move.type} ${move.row},${move.col}`,
         player: move.playerName,
+        playerId: move.playerId,
         boxesCompleted: move.boxesCompleted,
       })
 
@@ -132,21 +135,29 @@ export class GameSignaling {
         playerId,
         playerName,
         currentPlayers: gameState.players?.length || 0,
+        existingPlayers: gameState.players?.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          isPlaceholder: p.isPlaceholder,
+        })),
       })
 
       // Find an available placeholder slot
       let playerAdded = false
-      const updatedPlayers = gameState.players.map((player: any) => {
+      let slotIndex = -1
+      const updatedPlayers = gameState.players.map((player: any, index: number) => {
         if (player.isPlaceholder && !player.isComputer && !playerAdded && player.id.startsWith("placeholder_")) {
           playerAdded = true
+          slotIndex = index
           console.log("🔄 Updating player slot:", {
+            slotIndex: index,
             oldPlayer: { id: player.id, name: player.name },
             newPlayer: { id: playerId, name: playerName },
           })
           return {
             ...player,
             id: playerId,
-            name: playerName,
+            name: playerName, // Use the actual player name from their profile
             initials: playerName.substring(0, 2).toUpperCase(),
             isPlaceholder: false,
             connected: true,
@@ -160,9 +171,18 @@ export class GameSignaling {
         return false
       }
 
+      // Update scores object with new player ID
+      const updatedScores = { ...gameState.scores }
+      if (slotIndex >= 0) {
+        const oldPlayerId = gameState.players[slotIndex].id
+        delete updatedScores[oldPlayerId] // Remove old placeholder key
+        updatedScores[playerId] = 0 // Add new player key
+      }
+
       const updatedGameState = {
         ...gameState,
         players: updatedPlayers,
+        scores: updatedScores,
         activePlayerIds: updatedPlayers.filter((p: any) => !p.isPlaceholder).map((p: any) => p.id),
         lastUpdated: Date.now(),
       }
@@ -172,7 +192,13 @@ export class GameSignaling {
         roomId,
         playerId,
         playerName,
-        updatedPlayers: updatedPlayers.map((p: any) => ({ id: p.id, name: p.name, connected: p.connected })),
+        slotIndex,
+        updatedPlayers: updatedPlayers.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          connected: p.connected,
+          isPlaceholder: p.isPlaceholder,
+        })),
       })
 
       await set(gameRef, updatedGameState)
@@ -207,8 +233,10 @@ export class GameSignaling {
             gameId: gameState.id,
             roomId: gameState.roomId,
             currentPlayerIndex: gameState.currentPlayerIndex,
+            currentPlayer: gameState.players?.[gameState.currentPlayerIndex]?.name,
             gameStatus: gameState.gameStatus,
             playersCount: gameState.players?.length || 0,
+            players: gameState.players?.map((p: any) => ({ id: p.id, name: p.name, isPlaceholder: p.isPlaceholder })),
             activePlayerIds: gameState.activePlayerIds || [],
             lastMoveTimestamp: gameState.lastMove?.timestamp,
             lastMovePlayer: gameState.lastMove?.playerName,

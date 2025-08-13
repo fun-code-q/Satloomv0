@@ -97,7 +97,7 @@ const getUserColor = (username: string): string => {
 }
 
 export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: ChatInterfaceProps) {
-  console.log("ChatInterface: Initialized with roomId:", roomId)
+  console.log("ChatInterface: Initialized with roomId:", roomId, "userProfile:", userProfile)
 
   // Check if we're on mobile
   const isMobile = useMediaQuery("(max-width: 768px)")
@@ -714,6 +714,9 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
   const handleStartPlaygroundGame = async (config: GameConfig) => {
     try {
+      console.log("Starting playground game with config:", config)
+      console.log("Current user profile:", userProfile)
+
       if (config.mode === "single") {
         // Single player mode - start immediately with AI
         setPlaygroundConfig(config)
@@ -761,10 +764,12 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             sharedGameId,
             players: config.players.map((player, index) => {
               if (index === 0) {
-                // Host keeps their info
+                // Host keeps their info with actual user ID and name
+                console.log("Setting host player:", { id: currentUserId, name: userProfile.name })
                 return {
                   ...player,
-                  id: currentUserId, // Set the host's actual user ID
+                  id: currentUserId,
+                  name: userProfile.name, // Use actual user profile name
                 }
               } else if (player.isAI) {
                 // AI players keep their info
@@ -780,6 +785,8 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
               }
             }),
           }
+
+          console.log("Created multiplayer config:", multiplayerConfig)
 
           const gameInvite: GameInvite = {
             id: sharedGameId,
@@ -831,22 +838,34 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
     try {
       console.log("Accepting game invite:", activeGameInvite.id)
+      console.log("Current user profile for joining:", userProfile)
 
-      // Create a config for the joining player
+      // Find the first available placeholder slot and update it with current user info
+      let foundSlot = false
       const joiningConfig = {
         ...activeGameInvite.gameConfig,
         players: activeGameInvite.gameConfig.players.map((player, index) => {
           // Find the first placeholder slot and assign it to the current user
-          if (player.isPlaceholder && !player.isAI && player.id.startsWith("placeholder_")) {
+          if (player.isPlaceholder && !player.isAI && player.id.startsWith("placeholder_") && !foundSlot) {
+            foundSlot = true
+            console.log(`Assigning slot ${index} to user:`, { id: currentUserId, name: userProfile.name })
             return {
               ...player,
               id: currentUserId,
-              name: userProfile.name,
+              name: userProfile.name, // Use actual user profile name
               isPlaceholder: false,
             }
           }
           return player
         }),
+      }
+
+      console.log("Created joining config:", joiningConfig)
+
+      if (!foundSlot) {
+        notificationSystem.error("No available slots in the game")
+        setActiveGameInvite(null)
+        return
       }
 
       // Join the game with the updated config

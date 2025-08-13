@@ -68,6 +68,7 @@ export function DotsAndBoxesGameComponent({
   // Initialize game
   useEffect(() => {
     console.log("🎮 Initializing game with config:", gameConfig)
+    console.log("🎮 Current user ID:", currentUserId)
     initializeGame()
 
     return () => {
@@ -127,11 +128,14 @@ export function DotsAndBoxesGameComponent({
 
   const initializeMultiplayerGame = async () => {
     console.log("🎮 Initializing multiplayer game")
+    console.log("🎮 Game config players:", gameConfig.players)
     setIsMultiplayer(true)
 
     // Check if we're the host (first player) or joining
     const isGameHost = gameConfig.players[0]?.id === currentUserId || !gameConfig.sharedGameId
     setIsHost(isGameHost)
+
+    console.log("🎮 Is game host:", isGameHost)
 
     if (isGameHost) {
       // Host creates the game
@@ -147,10 +151,11 @@ export function DotsAndBoxesGameComponent({
 
     const players: Player[] = gameConfig.players.map((player, index) => {
       if (index === 0) {
-        // Host player
+        // Host player - use actual current user info
+        console.log("👑 Setting host player:", { id: currentUserId, name: player.name })
         return {
           id: currentUserId,
-          name: player.name,
+          name: player.name, // Use the name from game config (which should be user's actual name)
           color: player.color,
           isComputer: false,
           isHost: true,
@@ -183,6 +188,8 @@ export function DotsAndBoxesGameComponent({
       }
     })
 
+    console.log("👑 Created players array:", players)
+
     const newGame = new DotsAndBoxesGame(gameId, roomId, players, gameConfig.gridSize, gameConfig.voiceChatEnabled)
     setGame(newGame)
     localGameRef.current = newGame
@@ -190,6 +197,8 @@ export function DotsAndBoxesGameComponent({
 
     const initialState = newGame.getGameState()
     setGameState(initialState)
+
+    console.log("👑 Initial game state:", initialState)
 
     // Create game in Firebase
     try {
@@ -208,13 +217,14 @@ export function DotsAndBoxesGameComponent({
     console.log("🤝 Joining multiplayer game")
 
     try {
+      // Find current user in the config to get their name
+      const currentPlayerConfig = gameConfig.players.find((p) => p.id === currentUserId)
+      const playerName = currentPlayerConfig?.name || "Player"
+
+      console.log("🤝 Joining with player name:", playerName)
+
       // Try to join the game
-      const success = await gameSignaling.joinMultiplayerGame(
-        roomId,
-        gameId,
-        currentUserId,
-        gameConfig.players[0]?.name || "Player",
-      )
+      const success = await gameSignaling.joinMultiplayerGame(roomId, gameId, currentUserId, playerName)
 
       if (success) {
         console.log("✅ Successfully joined multiplayer game")
@@ -222,6 +232,8 @@ export function DotsAndBoxesGameComponent({
         // Get the updated game state
         const gameState = await gameSignaling.getMultiplayerGameState(roomId, gameId)
         if (gameState) {
+          console.log("🤝 Retrieved game state:", gameState)
+
           // Create local game instance with the current state
           const newGame = new DotsAndBoxesGame(
             gameId,
@@ -259,9 +271,11 @@ export function DotsAndBoxesGameComponent({
     const unsubscribe = gameSignaling.listenForMultiplayerGame(roomId, gameId, (updatedState) => {
       console.log("📡 Received multiplayer game state update:", {
         currentPlayerIndex: updatedState.currentPlayerIndex,
+        currentPlayer: updatedState.players?.[updatedState.currentPlayerIndex]?.name,
         gameStatus: updatedState.gameStatus,
         lastMove: updatedState.lastMove,
         playersCount: updatedState.players?.length,
+        players: updatedState.players?.map((p) => ({ id: p.id, name: p.name, isPlaceholder: p.isPlaceholder })),
         activePlayerIds: updatedState.activePlayerIds,
       })
 
@@ -731,6 +745,9 @@ export function DotsAndBoxesGameComponent({
       const currentPlayer = gameState.players[gameState.currentPlayerIndex]
       if (!currentPlayer) return
 
+      console.log("🎯 Current player:", currentPlayer)
+      console.log("🎯 Current user ID:", currentUserId)
+
       // Skip placeholder players
       if (currentPlayer.isPlaceholder) {
         console.log("⏭️ Skipping placeholder player turn")
@@ -745,7 +762,7 @@ export function DotsAndBoxesGameComponent({
 
       // In multiplayer, only allow moves for the current human player
       if (isMultiplayer && currentPlayer.id !== currentUserId) {
-        console.log("❌ Not your turn")
+        console.log("❌ Not your turn - current player:", currentPlayer.name, "current user:", currentUserId)
         notificationSystem.info(`It's ${currentPlayer.name}'s turn`)
         return
       }
