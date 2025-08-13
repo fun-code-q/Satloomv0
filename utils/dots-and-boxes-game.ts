@@ -62,6 +62,16 @@ export interface Move {
   boxesCompleted: number
 }
 
+interface MoveOption {
+  type: "horizontal" | "vertical"
+  row: number
+  col: number
+  score: number
+  completesBoxes: number
+  givesOpponentBoxes: number
+  strategicValue: number
+}
+
 export class DotsAndBoxesGame {
   private gameState: GameState
   private gridSize: number
@@ -416,31 +426,318 @@ export class DotsAndBoxesGame {
         return false
       }
 
-      console.log("Computer is making a move...")
+      console.log("AI is analyzing the board...")
 
-      // Get all available moves
-      const availableMoves = this.getAvailableMoves()
-      console.log(`Found ${availableMoves.length} available moves`)
+      // Get the best move using advanced strategy
+      const bestMove = this.getBestAIMove()
 
-      if (availableMoves.length === 0) {
-        console.log("No available moves for computer")
+      if (!bestMove) {
+        console.log("No available moves for AI")
         return false
       }
 
-      // Simple strategy: pick a random move
-      const randomIndex = Math.floor(Math.random() * availableMoves.length)
-      const move = availableMoves[randomIndex]
+      console.log(
+        `AI choosing strategic move: ${bestMove.type} at ${bestMove.row},${bestMove.col} (score: ${bestMove.score})`,
+      )
 
-      console.log(`Computer choosing move:`, move)
-
-      const success = this.makeMove(currentPlayer.id, move.type, move.row, move.col)
-      console.log(`Computer move success: ${success}`)
+      const success = this.makeMove(currentPlayer.id, bestMove.type, bestMove.row, bestMove.col)
+      console.log(`AI move success: ${success}`)
 
       return success
     } catch (err) {
-      console.error(`Error making computer move: ${err}`)
+      console.error(`Error making AI move: ${err}`)
       return false
     }
+  }
+
+  private getBestAIMove(): MoveOption | null {
+    const availableMoves = this.getAvailableMoves()
+    if (availableMoves.length === 0) {
+      return null
+    }
+
+    // Analyze each move and score it
+    const moveOptions: MoveOption[] = availableMoves.map((move) => {
+      return this.analyzeMoveOption(move.type, move.row, move.col)
+    })
+
+    // Sort by strategic value (highest first)
+    moveOptions.sort((a, b) => b.strategicValue - a.strategicValue)
+
+    // Apply difficulty-based strategy
+    const difficulty = this.gameState.difficulty
+
+    if (difficulty === "easy") {
+      // Easy: Mix of good moves and some random
+      const topMoves = moveOptions.slice(0, Math.max(3, Math.floor(moveOptions.length * 0.4)))
+      return topMoves[Math.floor(Math.random() * topMoves.length)]
+    } else if (difficulty === "medium") {
+      // Medium: Good strategic play with occasional suboptimal moves
+      const topMoves = moveOptions.slice(0, Math.max(2, Math.floor(moveOptions.length * 0.3)))
+      return Math.random() < 0.85 ? topMoves[0] : topMoves[Math.floor(Math.random() * topMoves.length)]
+    } else {
+      // Hard: Always pick the best strategic move
+      return moveOptions[0]
+    }
+  }
+
+  private analyzeMoveOption(type: "horizontal" | "vertical", row: number, col: number): MoveOption {
+    // Create a temporary copy to analyze this move
+    const tempGame = this.cloneGameState()
+
+    // Simulate the move
+    const boxesCompleted = this.simulateMove(tempGame, type, row, col)
+
+    // Calculate how many boxes this would give to opponent
+    const opponentBoxes = this.calculateOpponentBoxesGiven(type, row, col)
+
+    // Calculate strategic value
+    let strategicValue = 0
+
+    // High priority: Complete boxes immediately
+    if (boxesCompleted > 0) {
+      strategicValue += boxesCompleted * 100
+    }
+
+    // Medium priority: Avoid giving opponent easy boxes
+    strategicValue -= opponentBoxes * 50
+
+    // Low priority: Position for future advantage
+    strategicValue += this.calculatePositionalValue(type, row, col)
+
+    // Bonus for chain moves (moves that lead to more moves)
+    if (boxesCompleted > 0) {
+      const chainPotential = this.calculateChainPotential(tempGame)
+      strategicValue += chainPotential * 20
+    }
+
+    return {
+      type,
+      row,
+      col,
+      score: strategicValue,
+      completesBoxes: boxesCompleted,
+      givesOpponentBoxes: opponentBoxes,
+      strategicValue,
+    }
+  }
+
+  private cloneGameState(): GameState {
+    return JSON.parse(JSON.stringify(this.gameState))
+  }
+
+  private simulateMove(gameState: GameState, type: "horizontal" | "vertical", row: number, col: number): number {
+    try {
+      let completedBoxes = 0
+
+      if (type === "horizontal") {
+        // Check box above
+        if (row > 0) {
+          const boxRow = row - 1
+          const boxCol = col
+          if (this.wouldCompleteBox(gameState, boxRow, boxCol, type, row, col)) {
+            completedBoxes++
+          }
+        }
+
+        // Check box below
+        if (row < this.gridSize) {
+          const boxRow = row
+          const boxCol = col
+          if (this.wouldCompleteBox(gameState, boxRow, boxCol, type, row, col)) {
+            completedBoxes++
+          }
+        }
+      } else {
+        // Check box to the left
+        if (col > 0) {
+          const boxRow = row
+          const boxCol = col - 1
+          if (this.wouldCompleteBox(gameState, boxRow, boxCol, type, row, col)) {
+            completedBoxes++
+          }
+        }
+
+        // Check box to the right
+        if (col < this.gridSize) {
+          const boxRow = row
+          const boxCol = col
+          if (this.wouldCompleteBox(gameState, boxRow, boxCol, type, row, col)) {
+            completedBoxes++
+          }
+        }
+      }
+
+      return completedBoxes
+    } catch (err) {
+      console.error(`Error simulating move: ${err}`)
+      return 0
+    }
+  }
+
+  private wouldCompleteBox(
+    gameState: GameState,
+    boxRow: number,
+    boxCol: number,
+    moveType: "horizontal" | "vertical",
+    moveRow: number,
+    moveCol: number,
+  ): boolean {
+    try {
+      let top = gameState.horizontalLines[boxRow][boxCol].isDrawn
+      let bottom = gameState.horizontalLines[boxRow + 1][boxCol].isDrawn
+      let left = gameState.verticalLines[boxRow][boxCol].isDrawn
+      let right = gameState.verticalLines[boxRow][boxCol + 1].isDrawn
+
+      // Apply the proposed move
+      if (moveType === "horizontal") {
+        if (moveRow === boxRow) top = true
+        if (moveRow === boxRow + 1) bottom = true
+      } else {
+        if (moveCol === boxCol) left = true
+        if (moveCol === boxCol + 1) right = true
+      }
+
+      return top && bottom && left && right && !gameState.boxes[boxRow][boxCol].isCompleted
+    } catch (err) {
+      return false
+    }
+  }
+
+  private calculateOpponentBoxesGiven(type: "horizontal" | "vertical", row: number, col: number): number {
+    // Count how many boxes would have 3 sides after this move
+    let dangerousBoxes = 0
+
+    try {
+      if (type === "horizontal") {
+        // Check boxes above and below
+        const positions = [
+          { boxRow: row - 1, boxCol: col },
+          { boxRow: row, boxCol: col },
+        ]
+
+        for (const pos of positions) {
+          if (pos.boxRow >= 0 && pos.boxRow < this.gridSize) {
+            const sides = this.countBoxSides(pos.boxRow, pos.boxCol)
+            if (sides === 2) {
+              // After our move, it would have 3 sides
+              dangerousBoxes++
+            }
+          }
+        }
+      } else {
+        // Check boxes left and right
+        const positions = [
+          { boxRow: row, boxCol: col - 1 },
+          { boxRow: row, boxCol: col },
+        ]
+
+        for (const pos of positions) {
+          if (pos.boxCol >= 0 && pos.boxCol < this.gridSize) {
+            const sides = this.countBoxSides(pos.boxRow, pos.boxCol)
+            if (sides === 2) {
+              // After our move, it would have 3 sides
+              dangerousBoxes++
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`Error calculating opponent boxes: ${err}`)
+    }
+
+    return dangerousBoxes
+  }
+
+  private countBoxSides(boxRow: number, boxCol: number): number {
+    try {
+      let sides = 0
+      if (this.gameState.horizontalLines[boxRow][boxCol].isDrawn) sides++
+      if (this.gameState.horizontalLines[boxRow + 1][boxCol].isDrawn) sides++
+      if (this.gameState.verticalLines[boxRow][boxCol].isDrawn) sides++
+      if (this.gameState.verticalLines[boxRow][boxCol + 1].isDrawn) sides++
+      return sides
+    } catch (err) {
+      return 0
+    }
+  }
+
+  private calculatePositionalValue(type: "horizontal" | "vertical", row: number, col: number): number {
+    let value = 0
+
+    // Prefer center moves in early game
+    const totalMoves = this.getTotalMovesPlayed()
+    const totalPossibleMoves = (this.gridSize + 1) * this.gridSize + this.gridSize * (this.gridSize + 1)
+
+    if (totalMoves < totalPossibleMoves * 0.3) {
+      const centerRow = this.gridSize / 2
+      const centerCol = this.gridSize / 2
+
+      if (type === "horizontal") {
+        const distance = Math.abs(row - centerRow) + Math.abs(col - centerCol)
+        value += Math.max(0, 10 - distance)
+      } else {
+        const distance = Math.abs(row - centerRow) + Math.abs(col - centerCol)
+        value += Math.max(0, 10 - distance)
+      }
+    }
+
+    return value
+  }
+
+  private calculateChainPotential(gameState: GameState): number {
+    // Count boxes that are one move away from completion
+    let potential = 0
+
+    for (let row = 0; row < this.gridSize; row++) {
+      for (let col = 0; col < this.gridSize; col++) {
+        if (!gameState.boxes[row][col].isCompleted) {
+          const sides = this.countBoxSidesInState(gameState, row, col)
+          if (sides === 3) {
+            potential++
+          }
+        }
+      }
+    }
+
+    return potential
+  }
+
+  private countBoxSidesInState(gameState: GameState, boxRow: number, boxCol: number): number {
+    try {
+      let sides = 0
+      if (gameState.horizontalLines[boxRow][boxCol].isDrawn) sides++
+      if (gameState.horizontalLines[boxRow + 1][boxCol].isDrawn) sides++
+      if (gameState.verticalLines[boxRow][boxCol].isDrawn) sides++
+      if (gameState.verticalLines[boxRow][boxCol + 1].isDrawn) sides++
+      return sides
+    } catch (err) {
+      return 0
+    }
+  }
+
+  private getTotalMovesPlayed(): number {
+    let moves = 0
+
+    // Count horizontal lines
+    for (let row = 0; row <= this.gridSize; row++) {
+      for (let col = 0; col < this.gridSize; col++) {
+        if (this.gameState.horizontalLines[row][col].isDrawn) {
+          moves++
+        }
+      }
+    }
+
+    // Count vertical lines
+    for (let row = 0; row < this.gridSize; row++) {
+      for (let col = 0; col <= this.gridSize; col++) {
+        if (this.gameState.verticalLines[row][col].isDrawn) {
+          moves++
+        }
+      }
+    }
+
+    return moves
   }
 
   private getAvailableMoves(): Array<{ type: "horizontal" | "vertical"; row: number; col: number }> {
