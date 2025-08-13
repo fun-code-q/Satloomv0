@@ -45,6 +45,7 @@ export function DotsAndBoxesGameComponent({
   const aiTimerRef = useRef<NodeJS.Timeout | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
+  const gameListenerRef = useRef<(() => void) | null>(null)
 
   const gameSignaling = GameSignaling.getInstance()
   const gameSounds = GameSounds.getInstance()
@@ -152,6 +153,8 @@ export function DotsAndBoxesGameComponent({
           }
         })
 
+        gameListenerRef.current = unsubscribe
+
         return () => {
           unsubscribe()
           cleanup()
@@ -242,6 +245,14 @@ export function DotsAndBoxesGameComponent({
   useEffect(() => {
     drawGame()
   }, [gameState, selectedDot])
+
+  // Sync moves with Firebase for multiplayer
+  useEffect(() => {
+    if (!gameState || !game || gameConfig.mode === "single" || !gameConfig.sharedGameId) return
+
+    // Update Firebase when game state changes
+    gameSignaling.updateGame(roomId, gameState).catch(console.error)
+  }, [gameState, game, gameConfig.mode, gameConfig.sharedGameId, roomId])
 
   const makeAIMove = useCallback(
     (aiPlayer: Player) => {
@@ -489,6 +500,10 @@ export function DotsAndBoxesGameComponent({
     }
     peerConnectionsRef.current.forEach((pc) => pc.close())
     peerConnectionsRef.current.clear()
+
+    if (gameListenerRef.current) {
+      gameListenerRef.current()
+    }
 
     gameSignaling.cleanup()
   }

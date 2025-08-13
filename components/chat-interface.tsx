@@ -135,6 +135,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   // Game invite state - now tracks multiple invites
   const [gameInvites, setGameInvites] = useState<GameInvite[]>([])
   const [activeGameInvite, setActiveGameInvite] = useState<GameInvite | null>(null)
+  const [declinedInvites, setDeclinedInvites] = useState<Set<string>>(new Set())
 
   const [showTheaterSetup, setShowTheaterSetup] = useState(false)
   const [showTheaterFullscreen, setShowTheaterFullscreen] = useState(false)
@@ -210,8 +211,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
           msg.type === "game-invite" &&
           msg.gameInvite &&
           msg.gameInvite.hostId !== currentUserId &&
-          !msg.gameInvite.declined && // Don't show declined invites
-          !msg.gameInvite.accepted, // Don't show already accepted invites
+          !declinedInvites.has(msg.gameInvite.id), // Don't show declined invites
       )
 
       // Update game invites state
@@ -226,7 +226,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
       // Show the most recent active invite if we don't have one showing
       const latestActiveInvite = currentInvites[currentInvites.length - 1]
-      if (latestActiveInvite && !activeGameInvite) {
+      if (latestActiveInvite && !activeGameInvite && !declinedInvites.has(latestActiveInvite.id)) {
         setActiveGameInvite(latestActiveInvite)
       }
     })
@@ -337,7 +337,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
       userPresence.setUserOffline(roomId, currentUserId)
       callSignaling.cleanup()
     }
-  }, [roomId, currentUserId, userProfile, themeContext])
+  }, [roomId, currentUserId, userProfile, themeContext, declinedInvites, activeGameInvite])
 
   const handleSendMessage = async () => {
     if (message.trim()) {
@@ -829,48 +829,26 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     try {
       console.log("Accepting game invite:", activeGameInvite.id)
 
-      // Check if there's an active game to join
-      const success = await gameSignaling.joinGame(roomId, activeGameInvite.id, currentUserId, userProfile.name)
+      // Join the game with the shared config
+      setPlaygroundConfig(activeGameInvite.gameConfig)
+      setIsGameHost(false)
+      setShowPlayground(true)
+      setActiveGameInvite(null)
+      userPresence.updateActivity(roomId, currentUserId, "game")
 
-      if (success) {
-        // Join the game with the shared config
-        setPlaygroundConfig(activeGameInvite.gameConfig)
-        setIsGameHost(false)
-        setShowPlayground(true)
-        setActiveGameInvite(null)
-        userPresence.updateActivity(roomId, currentUserId, "game")
+      // Send a message to the chat that user joined
+      await messageStorage.sendMessage(roomId, {
+        text: `🎮 ${userProfile.name} joined the multiplayer game!`,
+        sender: "System",
+        timestamp: new Date(),
+        type: "system",
+        reactions: {
+          heart: [],
+          thumbsUp: [],
+        },
+      })
 
-        // Send a message to the chat that user joined
-        await messageStorage.sendMessage(roomId, {
-          text: `🎮 ${userProfile.name} joined the multiplayer game!`,
-          sender: "System",
-          timestamp: new Date(),
-          type: "system",
-          reactions: {
-            heart: [],
-            thumbsUp: [],
-          },
-        })
-
-        // Mark the invite as accepted in the original message
-        await messageStorage.sendMessage(roomId, {
-          text: `Game invite accepted by ${userProfile.name}`,
-          sender: "System",
-          timestamp: new Date(),
-          type: "game-invite-response",
-          gameInviteId: activeGameInvite.id,
-          response: "accepted",
-          reactions: {
-            heart: [],
-            thumbsUp: [],
-          },
-        })
-
-        notificationSystem.success(`Joined the game as ${userProfile.name}!`)
-      } else {
-        notificationSystem.error("Could not join the game - no available slots")
-        setActiveGameInvite(null)
-      }
+      notificationSystem.success(`Joined the game as ${userProfile.name}!`)
     } catch (error) {
       console.error("Error joining game:", error)
       notificationSystem.error("Failed to join game")
@@ -884,6 +862,10 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     console.log("Declining game invite:", activeGameInvite.id)
 
     try {
+      // Add to declined invites set
+      setDeclinedInvites((prev) => new Set(prev).add(activeGameInvite.id))
+
+      // Clear the active invite
       setActiveGameInvite(null)
 
       // Remove this invite from the list
@@ -895,20 +877,6 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         sender: "System",
         timestamp: new Date(),
         type: "system",
-        reactions: {
-          heart: [],
-          thumbsUp: [],
-        },
-      })
-
-      // Mark the invite as declined in the original message
-      await messageStorage.sendMessage(roomId, {
-        text: `Game invite declined by ${userProfile.name}`,
-        sender: "System",
-        timestamp: new Date(),
-        type: "game-invite-response",
-        gameInviteId: activeGameInvite.id,
-        response: "declined",
         reactions: {
           heart: [],
           thumbsUp: [],
