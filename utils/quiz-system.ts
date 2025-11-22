@@ -945,6 +945,21 @@ export class QuizSystem {
     await remove(sessionRef)
   }
 
+  async removeParticipant(roomId: string, sessionId: string, playerId: string): Promise<void> {
+    if (!database) return
+
+    const participantsRef = ref(database, `rooms/${roomId}/quiz/${sessionId}/participants`)
+    const participantsSnapshot = await new Promise<any>((resolve) => {
+      onValue(participantsRef, resolve, { onlyOnce: true })
+    })
+
+    const currentParticipants = participantsSnapshot.val() || []
+    if (currentParticipants.includes(playerId)) {
+      const updatedParticipants = currentParticipants.filter((id: string) => id !== playerId)
+      await set(participantsRef, updatedParticipants)
+    }
+  }
+
   // Clean up listeners
   cleanup() {
     this.quizListeners.forEach((unsubscribe) => unsubscribe())

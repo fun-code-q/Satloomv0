@@ -185,6 +185,19 @@ export function MessageBubble({
 
   const processedText = parseEmojis(message.text)
 
+  if (message.type === "system" || message.sender === "System") {
+    return (
+      <div className="flex justify-center my-4 w-full">
+        <div className="bg-slate-800/50 px-4 py-1.5 rounded-full text-xs text-gray-400 font-medium flex items-center gap-2 border border-slate-700/50">
+          <span className="opacity-70">
+            {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+          <span>{message.text}</span>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className={`flex ${isOwnMessage ? "justify-end" : "justify-start"} mb-4`}>
       <div className={`max-w-md ${isOwnMessage ? "order-2" : "order-1"}`}>

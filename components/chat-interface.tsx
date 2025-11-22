@@ -11,23 +11,7 @@ import { Input } from "@/components/ui/input"
 import { AnimatedLogo } from "./animated-logo"
 import { SpaceBackground } from "./space-background"
 import { UserActivityIndicators } from "./user-activity-indicators"
-import {
-  Mic,
-  Video,
-  Send,
-  MoreVertical,
-  Phone,
-  VideoIcon,
-  Film,
-  Gamepad2,
-  Settings,
-  Info,
-  X,
-  Camera,
-  Users,
-  Smile,
-  Copy,
-} from "lucide-react"
+import { Send, MoreVertical, Phone, VideoIcon, Film, Gamepad2, Settings, Info, X, Smile, Copy } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { AttachmentMenu } from "./attachment-menu"
 import { AudioCallModal } from "./audio-call-modal"
@@ -37,7 +21,6 @@ import { MessageBubble, type Message } from "./message-bubble"
 import { MediaRecorder } from "./media-recorder"
 import { IncomingCallNotification } from "./incoming-call-notification"
 import { CallSignaling, type CallData } from "@/utils/call-signaling"
-import { IncomingVideoCallNotification } from "./incoming-video-call-notification"
 import { VideoCallModal } from "./video-call-modal"
 import { PlaygroundSetupModal, type GameConfig } from "./playground-setup-modal"
 import { DotsAndBoxesGameComponent } from "./dots-and-boxes-game"
@@ -50,7 +33,6 @@ import { EmojiPicker } from "./emoji-picker"
 import { QuizSetupModal } from "./quiz-setup-modal"
 import { QuizSystem, type QuizSession, type QuizAnswer, type QuizResult } from "@/utils/quiz-system"
 import { GameInviteNotification } from "./game-invite-notification"
-import { MediaMenu } from "./media-menu"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { QuizQuestionBubble } from "./quiz-question-bubble"
 import { QuizResultsBubble } from "./quiz-results-bubble"
@@ -316,6 +298,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
                     if (timeLeft <= 0) {
                       clearInterval(quizTimerRef.current!)
+                      // Auto-submit empty answer if time runs out
                       if (!userQuizAnswer) {
                         handleQuizAnswer("")
                       }
@@ -1011,541 +994,342 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   const handleQuizAnswer = async (answer: string) => {
-    if (!currentQuizSession || userQuizAnswer) return
+    setUserQuizAnswer(answer)
 
-    try {
-      const currentQuestion = currentQuizSession.questions[currentQuizSession.currentQuestionIndex]
-      const timeToAnswer = currentQuizSession.timePerQuestion - quizTimeRemaining
-
-      setUserQuizAnswer(answer)
-
-      // Submit answer to Firebase
+    if (currentQuizSession && answer) {
+      // Calculate time taken
+      const timeTaken = currentQuizSession.timePerQuestion - quizTimeRemaining
       await quizSystem.submitAnswer(
         roomId,
         currentQuizSession.id,
         currentUserId,
         userProfile.name,
-        currentQuestion.id,
+        currentQuizSession.questions[currentQuizSession.currentQuestionIndex].id,
         answer,
-        currentQuestion.correctAnswer,
-        timeToAnswer,
+        currentQuizSession.questions[currentQuizSession.currentQuestionIndex].correctAnswer,
+        timeTaken,
       )
-
-      // Clear timer
-      if (quizTimerRef.current) {
-        clearInterval(quizTimerRef.current)
-      }
-
-      // Show results after a short delay
-      setTimeout(() => {
-        setShowQuizResults(true)
-
-        // Move to next question or end quiz after showing results
-        setTimeout(async () => {
-          if (currentQuizSession.currentQuestionIndex + 1 >= currentQuizSession.totalQuestions) {
-            // Quiz finished
-            await quizSystem.endQuiz(roomId, currentQuizSession.id)
-            const results = await quizSystem.calculateResults(roomId, currentQuizSession.id)
-            setQuizResults(results)
-
-            // Send results to chat
-            await messageStorage.sendQuizResults(roomId, results, currentQuizSession.totalQuestions)
-
-            // Clean up after showing final results
-            setTimeout(() => {
-              setCurrentQuizSession(null)
-              setQuizAnswers([])
-              setQuizResults([])
-              setUserQuizAnswer("")
-              setShowQuizResults(false)
-            }, 5000)
-          } else {
-            // Next question - only host advances the quiz
-            if (currentQuizSession.hostId === currentUserId) {
-              await quizSystem.nextQuestion(roomId, currentQuizSession.id, currentQuizSession.currentQuestionIndex)
-            }
-            // Clear user answer and results for next question
-            setUserQuizAnswer("")
-            setShowQuizResults(false)
-            // Clear quiz answers for the new question to reset participant status
-            setQuizAnswers([])
-          }
-        }, 3000)
-      }, 1000)
-    } catch (error) {
-      console.error("Error submitting quiz answer:", error)
-      notificationSystem.error("Failed to submit answer")
+    } else if (currentQuizSession && !answer && quizTimeRemaining <= 0) {
+      // Handle empty answer submission if time ran out
+      const timeTaken = currentQuizSession.timePerQuestion
+      await quizSystem.submitAnswer(
+        roomId,
+        currentQuizSession.id,
+        currentUserId,
+        userProfile.name,
+        currentQuizSession.questions[currentQuizSession.currentQuestionIndex].id,
+        "", // Empty answer
+        currentQuizSession.questions[currentQuizSession.currentQuestionIndex].correctAnswer,
+        timeTaken,
+      )
     }
   }
 
   const handleQuizExit = async () => {
-    if (!currentQuizSession) return
+    if (currentQuizSession) {
+      try {
+        // Remove user from participants list in DB
+        await quizSystem.removeParticipant(roomId, currentQuizSession.id, currentUserId)
 
-    try {
-      // Clear timer
+        // Send notification to the room
+        await messageStorage.sendMessage(roomId, {
+          text: `🚪 ${userProfile.name} has left the quiz.`,
+          sender: "System",
+          type: "system",
+          timestamp: new Date(),
+          reactions: {
+            heart: [],
+            thumbsUp: [],
+          },
+        })
+      } catch (error) {
+        console.error("Error leaving quiz:", error)
+      }
+
+      // Clear local state
+      setCurrentQuizSession(null)
+      setShowQuizResults(false)
       if (quizTimerRef.current) {
         clearInterval(quizTimerRef.current)
       }
-
-      // End quiz if host
-      if (currentQuizSession.hostId === currentUserId) {
-        await quizSystem.endQuiz(roomId, currentQuizSession.id)
-      }
-
-      // Clean up local state
-      setCurrentQuizSession(null)
-      setQuizAnswers([])
-      setQuizResults([])
-      setUserQuizAnswer("")
-      setShowQuizResults(false)
-      setQuizTimeRemaining(0)
-
-      notificationSystem.success("Quiz exited")
-    } catch (error) {
-      console.error("Error exiting quiz:", error)
-      notificationSystem.error("Failed to exit quiz")
-    }
-  }
-
-  // Early return if roomId is invalid
-  if (!roomId || roomId.trim() === "") {
-    return (
-      <div className="h-screen flex items-center justify-center bg-slate-900">
-        <div className="text-white text-center">
-          <div className="text-xl mb-4">Error: Invalid Room ID</div>
-          <button onClick={onLeave} className="bg-cyan-500 hover:bg-cyan-600 px-4 py-2 rounded">
-            Return to Home
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // Define handleFileSelect function
-  const handleFileSelect = (file: File | null) => {
-    if (file) {
-      console.log("File selected:", file.name, file.type)
-      // Here you would implement logic to handle the file upload.
-      // For example, upload to a storage service and then send a message
-      // with the file URL and metadata.
-      notificationSystem.info(`File "${file.name}" selected. Upload functionality not yet implemented.`)
-    } else {
-      console.log("File selection cancelled.")
     }
   }
 
   return (
-    <div className="h-screen flex flex-col relative overflow-hidden">
+    <div className="flex flex-col h-screen w-full bg-gray-900 text-white overflow-hidden">
       <SpaceBackground />
-
-      {/* Header - Fixed and responsive */}
-      <div className="flex items-center justify-between p-2 md:p-4 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700 min-h-[60px]">
-        <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
-          <AnimatedLogo />
-          <div className="flex items-center gap-1 md:gap-2 text-xs md:text-sm">
-            <Users className="w-3 h-3 md:w-4 md:h-4 text-gray-400" />
-            <span className="text-gray-400 whitespace-nowrap">{onlineUsers.length} online</span>
+      <div className="relative z-10 flex flex-col h-full">
+        {/* Header */}
+        <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-800">
+          <div className="flex items-center">
+            <AnimatedLogo className="h-8 w-8 mr-3" />
+            <h1 className="text-lg font-semibold">Lobby: {roomId}</h1>
           </div>
-          <div className="text-xs text-gray-500 truncate">Room: {roomId}</div>
-        </div>
-
-        <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
-          <Button
-            variant="ghost"
-            size={isMobile ? "sm" : "icon"}
-            className="text-white hover:bg-slate-700 bg-slate-800 border border-slate-600 h-8 w-8 md:h-10 md:w-10"
-            onClick={handleCopyRoomLink}
-            title={`Copy Room Link (${roomId})`}
-          >
-            <Copy className="w-3 h-3 md:w-4 md:h-4" />
-          </Button>
-
-          <Button
-            variant="ghost"
-            size={isMobile ? "sm" : "icon"}
-            className="text-white hover:bg-red-600 bg-red-500 border border-red-400 h-8 w-8 md:h-10 md:w-10"
-            onClick={handleLeaveRoom}
-            title={isHost ? "Destroy Room" : "Leave Room"}
-          >
-            <svg className="w-3 h-3 md:w-4 md:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-              />
-            </svg>
-          </Button>
-
-          <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size={isMobile ? "sm" : "icon"}
-                className="text-white hover:bg-slate-700 h-8 w-8 md:h-10 md:w-10"
-              >
-                <MoreVertical className="w-3 h-3 md:w-4 md:h-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              side="bottom"
-              className="bg-slate-800 border-slate-700 text-white min-w-48"
-              sideOffset={5}
-            >
-              {menuItems.map((item, index) => (
-                <DropdownMenuItem key={index} onClick={item.action} className="hover:bg-slate-700 cursor-pointer">
-                  <item.icon className="w-4 h-4 mr-3" />
-                  {item.label}
+          <div className="flex items-center space-x-3">
+            <UserActivityIndicators onlineUsers={onlineUsers} />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon">
+                  <MoreVertical className="h-5 w-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-gray-800 border-gray-700">
+                {menuItems.map((item) => (
+                  <DropdownMenuItem
+                    key={item.label}
+                    onClick={item.action}
+                    className="flex items-center space-x-2 cursor-pointer hover:bg-gray-700 focus:bg-gray-700"
+                  >
+                    <item.icon className="h-4 w-4" />
+                    <span>{item.label}</span>
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuItem
+                  onClick={handleCopyRoomLink}
+                  className="flex items-center space-x-2 cursor-pointer hover:bg-gray-700 focus:bg-gray-700"
+                >
+                  <Copy className="h-4 w-4" />
+                  <span>Copy Room Link</span>
                 </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
-
-      {/* Online Users Bar */}
-      {onlineUsers.length > 1 && (
-        <div className="px-2 md:px-4 py-2 bg-slate-800/50 border-b border-slate-700">
-          <div className="flex items-center gap-2 overflow-x-auto">
-            <span className="text-xs text-gray-400 whitespace-nowrap">Online:</span>
-            {onlineUsers.map((user) => (
-              <div
-                key={user.id}
-                className="flex items-center gap-1 bg-slate-700/50 rounded-full px-2 py-1 whitespace-nowrap"
-              >
-                {user.avatar ? (
-                  <img src={user.avatar || "/placeholder.svg"} alt={user.name} className="w-4 h-4 rounded-full" />
-                ) : (
-                  <div className="w-4 h-4 rounded-full bg-slate-600 flex items-center justify-center">
-                    <span className="text-xs">{user.name[0]}</span>
-                  </div>
-                )}
-                <span className="text-xs text-white">{user.name}</span>
-                {user.currentActivity && user.currentActivity !== "chat" && (
-                  <span className="text-xs text-cyan-400">({user.currentActivity})</span>
-                )}
-              </div>
-            ))}
+                <DropdownMenuItem
+                  onClick={handleLeaveRoom}
+                  className="flex items-center space-x-2 cursor-pointer hover:bg-gray-700 focus:bg-gray-700 text-red-500"
+                >
+                  <X className="h-4 w-4" />
+                  <span>Leave Room</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
-      )}
 
-      {/* User Activity Indicators */}
-      <UserActivityIndicators users={onlineUsers} currentUserId={currentUserId} />
-
-      {/* Chat Messages Area */}
-      <div className="flex-1 p-2 md:p-4 overflow-y-auto">
-        <div className="space-y-2">
-          {messages.length === 0 ? (
-            <div className="text-center text-gray-400 mt-8">
-              <div className="text-4xl mb-4">💬</div>
-              <p>No messages yet. Start the conversation!</p>
-              <p className="text-xs mt-2">Room ID: {roomId}</p>
-            </div>
-          ) : (
-            messages.map((msg) => (
-              <MessageBubble
-                key={msg.id}
-                message={msg}
-                isOwnMessage={msg.sender === userProfile.name}
-                userColor={getUserColor(msg.sender)}
-                currentUser={userProfile.name}
-                userAvatar={onlineUsers.find((u) => u.name === msg.sender)?.avatar}
-                onReply={handleMessageReply}
-                onReact={handleMessageReact}
-                onDelete={handleMessageDelete}
-                onEdit={handleMessageEdit}
-                onCopy={handleMessageCopy}
-              />
-            ))
-          )}
-          <div ref={messagesEndRef} />
+        {/* Main Content Area */}
+        <div className="flex flex-1 overflow-y-auto p-4 space-y-4 flex-col-reverse">
+          {messages.map((msg) => (
+            <MessageBubble
+              key={msg.id || Math.random()} // Use id if available, otherwise fallback to random
+              message={msg}
+              userProfile={userProfile}
+              onReply={() => handleMessageReply(msg)}
+              onReact={(reaction, userId) => handleMessageReact(msg.id, reaction, userId)}
+              onDelete={() => msg.id && handleMessageDelete(msg.id)}
+              onEdit={(newText) => msg.id && handleMessageEdit(msg.id, newText)}
+              onCopy={() => handleMessageCopy(msg.text)}
+            />
+          ))}
+          <div ref={messagesEndRef} /> {/* For auto-scrolling */}
         </div>
-      </div>
 
-      {/* Reply indicator */}
-      {replyingTo && (
-        <div className="px-4 py-2 bg-slate-800/60 border-t border-slate-700">
-          <div className="flex items-center justify-between bg-slate-700/50 rounded-lg p-2">
-            <div className="flex-1">
-              <div className="text-xs text-cyan-400 font-medium">Replying to {replyingTo.sender}</div>
-              <div className="text-xs text-gray-300 truncate">{replyingTo.text}</div>
+        {/* Input Area */}
+        <div className="p-4 border-t border-gray-700 bg-gray-800">
+          {replyingTo && (
+            <div className="flex items-center mb-2 p-2 bg-gray-700 rounded-md">
+              <div className="flex-grow">
+                <p className="text-sm text-gray-400">Replying to {replyingTo.sender}</p>
+                <p className="text-sm truncate">{replyingTo.text}</p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setReplyingTo(null)}>
+                <X className="h-4 w-4 text-gray-400" />
+              </Button>
             </div>
+          )}
+          <div className="flex items-center space-x-3">
+            <AttachmentMenu
+              onRecordAudio={() => handleStartMediaRecording("audio")}
+              onRecordVideo={() => handleStartMediaRecording("video")}
+            />
+            <Input
+              placeholder="Type your message..."
+              value={message}
+              onChange={handleInputChange}
+              onKeyPress={handleKeyPress}
+              className="flex-1 bg-gray-700 border-gray-600 placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500"
+            />
+            {showEmojiPicker && <EmojiPicker onSelect={handleEmojiSelect} />}
             <Button
-              variant="ghost"
               size="icon"
-              className="h-6 w-6 text-gray-400 hover:text-white"
-              onClick={() => setReplyingTo(null)}
+              variant="ghost"
+              onClick={() => setShowEmojiPicker((prev) => !prev)}
+              className="text-gray-400 hover:text-white"
             >
-              <X className="w-4 h-4" />
+              <Smile className="h-5 w-5" />
+            </Button>
+            <Button
+              onClick={handleSendMessage}
+              disabled={!message.trim() || isTyping}
+              className="bg-purple-600 hover:bg-purple-700"
+            >
+              <Send className="h-5 w-5" />
             </Button>
           </div>
         </div>
-      )}
 
-      {/* Message Input */}
-      <div className="p-2 md:p-4 bg-slate-900/80 backdrop-blur-sm border-t border-slate-700 relative">
-        <div className="flex items-center gap-1 md:gap-2">
-          <AttachmentMenu onFileSelect={handleFileSelect} />
-
-          {/* Conditionally render media buttons based on screen size */}
-          {isMobile ? (
-            <MediaMenu onSelectMedia={handleStartMediaRecording} />
-          ) : (
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-gray-400 hover:text-white hover:bg-slate-700"
-                onClick={() => handleStartMediaRecording("audio")}
-              >
-                <Mic className="w-4 h-4" />
-              </Button>
-
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-gray-400 hover:text-white hover:bg-slate-700"
-                onClick={() => handleStartMediaRecording("video")}
-              >
-                <Video className="w-4 h-4" />
-              </Button>
-
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-gray-400 hover:text-white hover:bg-slate-700"
-                onClick={() => handleStartMediaRecording("photo")}
-              >
-                <Camera className="w-4 h-4" />
-              </Button>
-            </>
-          )}
-
-          <Input
-            value={message}
-            onChange={handleInputChange}
-            onKeyPress={handleKeyPress}
-            placeholder="Type a message..."
-            className="flex-1 bg-slate-800 border-slate-600 text-white placeholder-gray-400 text-sm md:text-base"
-            maxLength={1000}
-          />
-
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-gray-400 hover:text-white hover:bg-slate-700"
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-          >
-            <Smile className="w-4 h-4" />
-          </Button>
-
-          <Button
-            onClick={handleSendMessage}
-            className="bg-cyan-500 hover:bg-cyan-600"
-            disabled={!message.trim()}
-            size={isMobile ? "sm" : "default"}
-          >
-            <Send className="w-4 h-4" />
-          </Button>
-        </div>
-
-        {/* Emoji Picker */}
-        <EmojiPicker
-          isOpen={showEmojiPicker}
-          onClose={() => setShowEmojiPicker(false)}
-          onEmojiSelect={handleEmojiSelect}
-        />
-      </div>
-
-      {/* Incoming Call Notifications */}
-      {incomingCall && incomingCall.type === "audio" && (
-        <IncomingCallNotification call={incomingCall} onAnswer={handleAnswerCall} onDecline={handleDeclineCall} />
-      )}
-
-      {incomingCall && incomingCall.type === "video" && (
-        <IncomingVideoCallNotification
-          call={incomingCall}
-          onAnswer={handleAnswerVideoCall}
-          onDecline={handleDeclineCall}
-        />
-      )}
-
-      {/* Theater Invite Notification */}
-      {theaterInvite && (
-        <TheaterInviteNotification
-          invite={theaterInvite}
-          onAccept={handleAcceptTheaterInvite}
-          onDecline={handleDeclineTheaterInvite}
-        />
-      )}
-
-      {/* Game Invite Notification - Show the active invite */}
-      {activeGameInvite && (
-        <GameInviteNotification
-          invite={activeGameInvite}
-          onAccept={handleAcceptGameInvite}
-          onDecline={handleDeclineGameInvite}
-        />
-      )}
-
-      {/* Modals */}
-      <AudioCallModal
-        isOpen={showAudioCall}
-        onClose={handleEndCall}
-        roomId={roomId}
-        currentUser={userProfile.name}
-        currentUserId={currentUserId}
-        callData={currentCall}
-        isIncoming={!!currentCall && currentCall.callerId !== currentUserId}
-      />
-
-      <VideoCallModal
-        isOpen={showVideoCall}
-        onClose={handleEndVideoCall}
-        roomId={roomId}
-        currentUser={userProfile.name}
-        currentUserId={currentUserId}
-        callData={currentCall}
-        isIncoming={!!currentCall && currentCall.callerId !== currentUserId}
-      />
-
-      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
-      <AboutModal isOpen={showAbout} onClose={() => setShowAbout(false)} />
-
-      <MediaRecorder
-        isOpen={showMediaRecorder}
-        onClose={handleMediaRecorderClose}
-        mode={mediaRecorderMode}
-        onMediaReady={handleMediaRecorderClose}
-      />
-
-      <PlaygroundSetupModal
-        isOpen={showPlaygroundSetup}
-        onClose={() => setShowPlaygroundSetup(false)}
-        onStartGame={handleStartPlaygroundGame}
-      />
-
-      <TheaterSetupModal
-        isOpen={showTheaterSetup}
-        onClose={() => setShowTheaterSetup(false)}
-        onCreateSession={handleCreateTheaterSession}
-      />
-
-      {/* Full-screen overlays */}
-      {showPlayground && playgroundConfig && (
-        <div className="fixed inset-0 z-50 bg-slate-900">
-          <DotsAndBoxesGameComponent
-            gameConfig={playgroundConfig}
+        {/* Modals and Overlays */}
+        {showAudioCall && currentCall && (
+          <AudioCallModal
+            callData={currentCall}
+            userId={currentUserId}
+            userName={userProfile.name}
             roomId={roomId}
-            currentUserId={currentUserId}
+            onEndCall={handleEndCall}
+            isCaller={currentCall.callerId === currentUserId}
+          />
+        )}
+        {showVideoCall && currentCall && (
+          <VideoCallModal
+            callData={currentCall}
+            userId={currentUserId}
+            userName={userProfile.name}
+            roomId={roomId}
+            onEndCall={handleEndVideoCall}
+            isCaller={currentCall.callerId === currentUserId}
+          />
+        )}
+        {incomingCall && !showAudioCall && !showVideoCall && (
+          <IncomingCallNotification
+            callerName={incomingCall.caller}
+            onAccept={incomingCall.type === "video" ? handleAnswerVideoCall : handleAnswerCall}
+            onDecline={handleDeclineCall}
+            type={incomingCall.type}
+          />
+        )}
+        {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+        {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
+        {showMediaRecorder && (
+          <MediaRecorder
+            mode={mediaRecorderMode}
+            roomId={roomId}
+            userId={currentUserId}
+            userName={userProfile.name}
+            onClose={handleMediaRecorderClose}
+          />
+        )}
+        {showPlaygroundSetup && (
+          <PlaygroundSetupModal
+            onClose={() => setShowPlaygroundSetup(false)}
+            onStartGame={handleStartPlaygroundGame}
+            userProfile={userProfile}
+          />
+        )}
+        {showPlayground && playgroundConfig && (
+          <DotsAndBoxesGameComponent
+            config={playgroundConfig}
+            userId={currentUserId}
+            userName={userProfile.name}
+            isHost={isGameHost}
             onExit={handleExitPlayground}
           />
-        </div>
-      )}
-
-      {currentTheaterSession && (
-        <TheaterFullscreen
-          isOpen={showTheaterFullscreen}
-          onClose={handleExitTheater}
-          session={currentTheaterSession}
-          roomId={roomId}
-          currentUser={userProfile.name}
-          currentUserId={currentUserId}
-          isHost={isTheaterHost}
-        />
-      )}
-
-      {/* Leave Room Confirmation Modal */}
-      {showLeaveConfirmation && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 text-center max-w-md w-full">
-            <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
-                />
-              </svg>
-            </div>
-
-            <h2 className="text-xl font-bold text-white mb-2">{isHost ? "Destroy Room?" : "Leave Room?"}</h2>
-            <p className="text-gray-300 mb-6">
-              {isHost
-                ? "Are you sure you want to destroy this room? All users will be disconnected and the room will no longer be accessible."
-                : "Are you sure you want to leave this room? You can rejoin later with the room ID."}
-            </p>
-
-            <div className="flex gap-4 justify-center">
-              <Button onClick={handleConfirmLeave} className="bg-red-500 hover:bg-red-600 text-white px-6">
-                {isHost ? "Yes, Destroy Room" : "Yes, Leave"}
-              </Button>
-              <Button
-                onClick={() => setShowLeaveConfirmation(false)}
-                variant="outline"
-                className="border-slate-600 text-white hover:bg-slate-700 bg-transparent px-6"
-              >
-                Cancel
-              </Button>
+        )}
+        {showTheaterSetup && (
+          <TheaterSetupModal onClose={() => setShowTheaterSetup(false)} onCreateSession={handleCreateTheaterSession} />
+        )}
+        {showTheaterFullscreen && currentTheaterSession && (
+          <TheaterFullscreen session={currentTheaterSession} onExit={handleExitTheater} isHost={isTheaterHost} />
+        )}
+        {theaterInvite && !showTheaterFullscreen && (
+          <TheaterInviteNotification
+            hostName={theaterInvite.host}
+            videoTitle={theaterInvite.videoTitle}
+            onAccept={handleAcceptTheaterInvite}
+            onDecline={handleDeclineTheaterInvite}
+          />
+        )}
+        {activeGameInvite && !showPlayground && (
+          <GameInviteNotification
+            inviterName={activeGameInvite.hostName}
+            gameType={activeGameInvite.gameConfig.gameType}
+            onAccept={handleAcceptGameInvite}
+            onDecline={handleDeclineGameInvite}
+          />
+        )}
+        {showQuizSetup && <QuizSetupModal onClose={() => setShowQuizSetup(false)} onStartQuiz={handleStartQuiz} />}
+        {currentQuizSession && !showQuizResults && (
+          <div className="fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-75">
+            <div className="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md mx-auto">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold">Quiz: {currentQuizSession.title || "Untitled Quiz"}</h2>
+                <Button
+                  variant="outline"
+                  onClick={handleQuizExit}
+                  className="border-red-500 text-red-500 hover:bg-red-500 hover:text-white bg-transparent"
+                >
+                  Exit Quiz
+                </Button>
+              </div>
+              {currentQuizSession.status === "active" && (
+                <>
+                  <QuizQuestionBubble
+                    question={currentQuizSession.questions[currentQuizSession.currentQuestionIndex]}
+                    timeRemaining={quizTimeRemaining}
+                  />
+                  <div className="mt-4 flex items-center space-x-2">
+                    <Input
+                      placeholder="Your answer..."
+                      value={userQuizAnswer}
+                      onChange={(e) => setUserQuizAnswer(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault()
+                          handleQuizAnswer(userQuizAnswer)
+                        }
+                      }}
+                      className="flex-1 bg-gray-700 border-gray-600 placeholder-gray-400"
+                      disabled={quizTimeRemaining <= 0}
+                    />
+                    <Button
+                      onClick={() => handleQuizAnswer(userQuizAnswer)}
+                      disabled={!userQuizAnswer || quizTimeRemaining <= 0}
+                      className="bg-purple-600 hover:bg-purple-700"
+                    >
+                      Submit
+                    </Button>
+                  </div>
+                </>
+              )}
+              {currentQuizSession.status === "finished" && (
+                <div className="text-center py-4">
+                  <p className="text-lg mb-4">Quiz Finished!</p>
+                  <Button onClick={() => setShowQuizResults(true)}>View Results</Button>
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        )}
+        {currentQuizSession && showQuizResults && (
+          <div className="fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-75">
+            <div className="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-2xl mx-auto overflow-y-auto max-h-screen">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold">Quiz Results: {currentQuizSession.title || "Untitled Quiz"}</h2>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowQuizResults(false)}
+                  className="border-gray-600 text-gray-400 hover:bg-gray-700"
+                >
+                  Close
+                </Button>
+              </div>
+              <QuizResultsBubble quizSession={currentQuizSession} quizAnswers={quizAnswers} userProfile={userProfile} />
+            </div>
+          </div>
+        )}
 
-      <QuizSetupModal isOpen={showQuizSetup} onClose={() => setShowQuizSetup(false)} onStartQuiz={handleStartQuiz} />
-
-      {/* Quiz Overlay */}
-      {currentQuizSession && currentQuizSession.status === "active" && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <QuizQuestionBubble
-            question={currentQuizSession.questions[currentQuizSession.currentQuestionIndex]}
-            currentQuestionNumber={currentQuizSession.currentQuestionIndex + 1}
-            totalQuestions={currentQuizSession.totalQuestions}
-            timeRemaining={quizTimeRemaining}
-            participants={onlineUsers.map((user) => {
-              // Get current question ID
-              const currentQuestionId = currentQuizSession.questions[currentQuizSession.currentQuestionIndex].id
-
-              // Check if this specific user has answered the current question
-              const hasAnsweredCurrentQuestion = quizAnswers.some(
-                (answer) => answer.playerId === user.id && answer.questionId === currentQuestionId,
-              )
-
-              return {
-                id: user.id,
-                name: user.name,
-                hasAnswered: hasAnsweredCurrentQuestion,
-              }
-            })}
-            userAnswer={userQuizAnswer}
-            onAnswer={handleQuizAnswer}
-            onExit={handleQuizExit}
-            showResults={showQuizResults}
-            correctAnswer={
-              showQuizResults
-                ? currentQuizSession.questions[currentQuizSession.currentQuestionIndex].correctAnswer
-                : undefined
-            }
-            answers={
-              showQuizResults
-                ? quizAnswers.filter(
-                    (a) => a.questionId === currentQuizSession.questions[currentQuizSession.currentQuestionIndex].id,
-                  )
-                : []
-            }
-          />
-        </div>
-      )}
-
-      {/* Quiz Results Overlay */}
-      {quizResults.length > 0 && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <QuizResultsBubble results={quizResults} totalQuestions={currentQuizSession?.totalQuestions || 10} />
-        </div>
-      )}
+        {showLeaveConfirmation && (
+          <div className="fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-75">
+            <div className="bg-gray-800 p-6 rounded-lg shadow-xl text-center">
+              <h3 className="text-lg font-semibold mb-4">Confirm Leave</h3>
+              <p className="mb-6">Are you sure you want to leave this room?</p>
+              <div className="flex justify-center space-x-4">
+                <Button variant="outline" onClick={() => setShowLeaveConfirmation(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={handleConfirmLeave} className="bg-red-600 hover:bg-red-700">
+                  Leave
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

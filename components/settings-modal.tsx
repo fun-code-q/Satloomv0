@@ -113,7 +113,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               theme === "dark" ? "bg-cyan-500 hover:bg-cyan-600" : "bg-blue-500 hover:bg-blue-600"
             } text-white`}
           >
-            Save Settings
+            Done
           </Button>
           <Button
             onClick={onClose}
