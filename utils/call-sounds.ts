@@ -118,6 +118,12 @@ export class CallSounds {
     setTimeout(() => this.playTone(440, 0.2, "sine", 0.1), 200)
   }
 
+  async playBeep() {
+    this.initAudioContext()
+    // Sharp beep
+    await this.playTone(1000, 0.3, "sine", 0.15)
+  }
+
   stopAll() {
     if (this.ringtoneInterval) {
       clearInterval(this.ringtoneInterval)

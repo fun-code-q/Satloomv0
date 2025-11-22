@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 import { TheaterSignaling, type TheaterSession, type QueueVideo } from "@/utils/theater-signaling"
 import { Input } from "@/components/ui/input"
+import { CallSounds } from "@/utils/call-sounds" // Added import
 
 interface TheaterFullscreenProps {
   isOpen: boolean
@@ -73,6 +74,7 @@ export function TheaterFullscreen({
   const [hasRaisedHand, setHasRaisedHand] = useState(false)
   const [raiseHandNotifications, setRaiseHandNotifications] = useState<RaiseHandNotification[]>([])
   const [showSubtitles, setShowSubtitles] = useState(false)
+  const [overlayMessage, setOverlayMessage] = useState<{ text: string; visible: boolean }>({ text: "", visible: false })
   const [youtubePlayer, setYoutubePlayer] = useState<any>(null)
   const [vimeoPlayer, setVimeoPlayer] = useState<any>(null)
   const [playerReady, setPlayerReady] = useState(false)
@@ -369,7 +371,7 @@ export function TheaterFullscreen({
     if (timeDiff > 5000) return
 
     // If I am the one who triggered the action, don't re-apply it from the server echo immediately
-    if (action.userId === currentUserId && timeDiff < 1000) return
+    if (action.userId === currentUserId && timeDiff < 1000 && action.type !== "raise_hand") return // Allow raise_hand to process even for sender to show feedback
 
     isProgrammaticUpdate.current = true
 
@@ -384,6 +386,20 @@ export function TheaterFullscreen({
         if (action.currentTime !== undefined) {
           handleSeek(action.currentTime, false)
         }
+        break
+      case "raise_hand":
+        // Play beep sound
+        CallSounds.getInstance().playBeep()
+
+        // Show notification based on CURRENT session status
+        // We use session.status because it is the source of truth for the room
+        const message = session.status === "playing" ? "STOP" : "CONTINUE"
+        setOverlayMessage({ text: message, visible: true })
+
+        // Hide after 2 seconds
+        setTimeout(() => {
+          setOverlayMessage((prev) => ({ ...prev, visible: false }))
+        }, 2000)
         break
     }
 
@@ -759,210 +775,213 @@ export function TheaterFullscreen({
   return (
     <div
       ref={containerRef}
-      className="fixed inset-0 z-50 bg-gradient-to-br from-slate-900 via-purple-900/20 to-slate-900"
+      className={`fixed inset-0 z-50 bg-black flex flex-col items-center justify-center transition-all duration-300 ${
+        isFullscreen ? "w-screen h-screen" : ""
+      }`}
       onMouseMove={handleMouseMove}
+      onMouseLeave={() => setShowControls(false)}
     >
-      {/* Video Container */}
-      <div className="relative w-full h-full flex items-center justify-center">
-        <div className="relative w-full max-w-6xl mx-auto bg-black/50 backdrop-blur-sm rounded-2xl overflow-hidden shadow-2xl border border-white/10">
-          {/* Video Player */}
-          <div className="relative aspect-video bg-black">
-            {platform === "youtube" && <div id="youtube-player" className="w-full h-full" />}
-
-            {platform === "vimeo" && (
-              <iframe
-                id="vimeo-player"
-                src={`https://player.vimeo.com/video/${videoId}?background=1&autoplay=0&loop=0&byline=0&title=0&portrait=0&controls=0`}
-                className="w-full h-full"
-                frameBorder="0"
-                allow="autoplay; fullscreen"
-              />
-            )}
-
-            {platform === "soundcloud" && (
-              <iframe
-                id="soundcloud-player"
-                src={`https://w.soundcloud.com/player/?url=${encodeURIComponent(session.videoUrl)}&auto_play=false&hide_related=true&show_comments=false&show_user=false&show_reposts=false&show_teaser=false&visual=true&enable_api=true`}
-                className="w-full h-full"
-                frameBorder="0"
-                allow="autoplay"
-              />
-            )}
-
-            {platform === "direct" && (
-              <video ref={videoRef} className="w-full h-full object-contain" controls={false} />
-            )}
-          </div>
-
-          {/* Controls Overlay */}
-          <div
-            className={`absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 transition-opacity duration-300 ${
-              showControls ? "opacity-100" : "opacity-0"
-            }`}
-          >
-            {/* Top Controls */}
-            <div className="absolute top-0 left-0 right-0 p-4 flex items-center justify-between">
-              <div className="flex items-center gap-4 text-white">
-                <div className="flex items-center gap-2">
-                  {getPlatformIcon(platform)}
-                  <span className="text-sm font-medium">{platform.charAt(0).toUpperCase() + platform.slice(1)}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Users className="w-4 h-4" />
-                  <span className="text-sm">{session.participants.length}</span>
-                </div>
-                {queue.length > 0 && (
-                  <div className="flex items-center gap-1">
-                    <List className="w-4 h-4" />
-                    <span className="text-sm">Queue: {queue.length}</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                {/* Raise Hand Button - moved to controls section */}
-                <Button
-                  onClick={handleRaiseHand}
-                  className="bg-yellow-500/80 hover:bg-yellow-500 text-black backdrop-blur-sm"
-                  size="sm"
-                >
-                  <Hand className="w-4 h-4 mr-1" />
-                  {raiseHandCount > 0 && raiseHandCount}
-                </Button>
-
-                <Button
-                  onClick={() => setShowSettings(!showSettings)}
-                  variant="ghost"
-                  size="sm"
-                  className="text-white hover:bg-white/20"
-                >
-                  <Settings className="w-4 h-4" />
-                </Button>
-                <Button
-                  onClick={() => setShowQueue(!showQueue)}
-                  variant="ghost"
-                  size="sm"
-                  className="text-white hover:bg-white/20"
-                >
-                  <List className="w-4 h-4" />
-                </Button>
-                <Button onClick={handleFullscreen} variant="ghost" size="sm" className="text-white hover:bg-white/20">
-                  <Maximize className="w-4 h-4" />
-                </Button>
-                <Button onClick={onClose} variant="ghost" size="sm" className="text-white hover:bg-white/20">
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-
-            {/* Bottom Controls */}
-            <div className="absolute bottom-0 left-0 right-0 p-4">
-              {/* Progress Bar */}
-              <div className="mb-4">
-                <Slider
-                  value={[currentTime]}
-                  max={duration}
-                  step={1}
-                  onValueChange={(value) => isHost && handleSeek(value[0])}
-                  className="w-full"
-                  disabled={!isHost}
-                />
-                <div className="flex justify-between text-xs text-white/70 mt-1">
-                  <span>{formatTime(currentTime)}</span>
-                  <span>{formatTime(duration)}</span>
-                </div>
-              </div>
-
-              {/* Control Buttons */}
-              <div className="flex items-center justify-center gap-4">
-                {isHost ? (
-                  <Button
-                    onClick={() => (isPlaying ? handlePause() : handlePlay())}
-                    className="bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm"
-                    size="lg"
-                  >
-                    {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
-                  </Button>
-                ) : (
-                  <div className="text-white/70 text-sm">
-                    {isPlaying ? "Playing" : "Paused"} • Host controls playback
-                  </div>
-                )}
-
-                <div className="flex items-center gap-2">
-                  <Button onClick={handleMute} variant="ghost" size="sm" className="text-white hover:bg-white/20">
-                    {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                  </Button>
-                  <Slider
-                    value={[isMuted ? 0 : volume]}
-                    max={1}
-                    step={0.1}
-                    onValueChange={handleVolumeChange}
-                    className="w-20"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Queue Panel */}
-        {showQueue && (
-          <div className="absolute right-4 top-1/2 -translate-y-1/2 w-80 bg-black/80 backdrop-blur-sm rounded-xl p-4 border border-white/10">
-            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
-              <List className="w-4 h-4" />
-              Queue ({queue.length}/3)
-            </h3>
-
-            {/* Add to Queue */}
-            <div className="mb-4">
-              <div className="flex gap-2">
-                <Input
-                  value={newVideoUrl}
-                  onChange={(e) => setNewVideoUrl(e.target.value)}
-                  placeholder="Paste video URL..."
-                  className="bg-white/10 border-white/20 text-white placeholder-white/50"
-                  disabled={queue.length >= 3}
-                />
-                <Button
-                  onClick={handleAddToQueue}
-                  disabled={!newVideoUrl.trim() || queue.length >= 3}
-                  size="sm"
-                  className="bg-purple-500 hover:bg-purple-600"
-                >
-                  <Plus className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-
-            {/* Queue List */}
-            <div className="space-y-2 max-h-60 overflow-y-auto">
-              {queue.map((video, index) => (
-                <div key={video.id} className="flex items-center gap-3 p-2 bg-white/5 rounded-lg">
-                  <div className="flex items-center gap-2 flex-1">
-                    {getPlatformIcon(video.platform)}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-white text-sm truncate">{video.title}</div>
-                      <div className="text-white/50 text-xs">Added by {video.addedBy}</div>
-                    </div>
-                  </div>
-                  {isHost && (
-                    <Button
-                      onClick={() => handleRemoveFromQueue(video.id)}
-                      variant="ghost"
-                      size="sm"
-                      className="text-red-400 hover:text-red-300 hover:bg-red-500/20"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
-                  )}
-                </div>
-              ))}
-              {queue.length === 0 && <div className="text-white/50 text-center py-4">No videos in queue</div>}
+      {/* Video Player */}
+      <div className="w-full h-full relative bg-black flex items-center justify-center group">
+        {overlayMessage.visible && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
+            <div className="bg-black/70 text-white text-6xl font-bold px-12 py-6 rounded-2xl border-4 border-white animate-in fade-in zoom-in duration-200">
+              {overlayMessage.text}
             </div>
           </div>
         )}
+
+        {/* Platforms */}
+        {platform === "youtube" && <div id="youtube-player" className="w-full h-full" />}
+
+        {platform === "vimeo" && (
+          <iframe
+            id="vimeo-player"
+            src={`https://player.vimeo.com/video/${videoId}?background=1&autoplay=0&loop=0&byline=0&title=0&portrait=0&controls=0`}
+            className="w-full h-full"
+            frameBorder="0"
+            allow="autoplay; fullscreen"
+          />
+        )}
+
+        {platform === "soundcloud" && (
+          <iframe
+            id="soundcloud-player"
+            src={`https://w.soundcloud.com/player/?url=${encodeURIComponent(session.videoUrl)}&auto_play=false&hide_related=true&show_comments=false&show_user=false&show_reposts=false&show_teaser=false&visual=true&enable_api=true`}
+            className="w-full h-full"
+            frameBorder="0"
+            allow="autoplay"
+          />
+        )}
+
+        {platform === "direct" && <video ref={videoRef} className="w-full h-full object-contain" controls={false} />}
       </div>
+
+      {/* Controls Overlay */}
+      <div
+        className={`absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 transition-opacity duration-300 ${
+          showControls ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        {/* Top Controls */}
+        <div className="absolute top-0 left-0 right-0 p-4 flex items-center justify-between">
+          <div className="flex items-center gap-4 text-white">
+            <div className="flex items-center gap-2">
+              {getPlatformIcon(platform)}
+              <span className="text-sm font-medium">{platform.charAt(0).toUpperCase() + platform.slice(1)}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Users className="w-4 h-4" />
+              <span className="text-sm">{session.participants.length}</span>
+            </div>
+            {queue.length > 0 && (
+              <div className="flex items-center gap-1">
+                <List className="w-4 h-4" />
+                <span className="text-sm">Queue: {queue.length}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Raise Hand Button - moved to controls section */}
+            <Button
+              onClick={handleRaiseHand}
+              className="bg-yellow-500/80 hover:bg-yellow-500 text-black backdrop-blur-sm"
+              size="sm"
+            >
+              <Hand className="w-4 h-4 mr-1" />
+              {raiseHandCount > 0 && raiseHandCount}
+            </Button>
+
+            <Button
+              onClick={() => setShowSettings(!showSettings)}
+              variant="ghost"
+              size="sm"
+              className="text-white hover:bg-white/20"
+            >
+              <Settings className="w-4 h-4" />
+            </Button>
+            <Button
+              onClick={() => setShowQueue(!showQueue)}
+              variant="ghost"
+              size="sm"
+              className="text-white hover:bg-white/20"
+            >
+              <List className="w-4 h-4" />
+            </Button>
+            <Button onClick={handleFullscreen} variant="ghost" size="sm" className="text-white hover:bg-white/20">
+              <Maximize className="w-4 h-4" />
+            </Button>
+            <Button onClick={onClose} variant="ghost" size="sm" className="text-white hover:bg-white/20">
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+
+        {/* Bottom Controls */}
+        <div className="absolute bottom-0 left-0 right-0 p-4">
+          {/* Progress Bar */}
+          <div className="mb-4">
+            <Slider
+              value={[currentTime]}
+              max={duration}
+              step={1}
+              onValueChange={(value) => isHost && handleSeek(value[0])}
+              className="w-full"
+              disabled={!isHost}
+            />
+            <div className="flex justify-between text-xs text-white/70 mt-1">
+              <span>{formatTime(currentTime)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
+          </div>
+
+          {/* Control Buttons */}
+          <div className="flex items-center justify-center gap-4">
+            {isHost ? (
+              <Button
+                onClick={() => (isPlaying ? handlePause() : handlePlay())}
+                className="bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm"
+                size="lg"
+              >
+                {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
+              </Button>
+            ) : (
+              <div className="text-white/70 text-sm">{isPlaying ? "Playing" : "Paused"} • Host controls playback</div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <Button onClick={handleMute} variant="ghost" size="sm" className="text-white hover:bg-white/20">
+                {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+              </Button>
+              <Slider
+                value={[isMuted ? 0 : volume]}
+                max={1}
+                step={0.1}
+                onValueChange={handleVolumeChange}
+                className="w-20"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Queue Panel */}
+      {showQueue && (
+        <div className="absolute right-4 top-1/2 -translate-y-1/2 w-80 bg-black/80 backdrop-blur-sm rounded-xl p-4 border border-white/10">
+          <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+            <List className="w-4 h-4" />
+            Queue ({queue.length}/3)
+          </h3>
+
+          {/* Add to Queue */}
+          <div className="mb-4">
+            <div className="flex gap-2">
+              <Input
+                value={newVideoUrl}
+                onChange={(e) => setNewVideoUrl(e.target.value)}
+                placeholder="Paste video URL..."
+                className="bg-white/10 border-white/20 text-white placeholder-white/50"
+                disabled={queue.length >= 3}
+              />
+              <Button
+                onClick={handleAddToQueue}
+                disabled={!newVideoUrl.trim() || queue.length >= 3}
+                size="sm"
+                className="bg-purple-500 hover:bg-purple-600"
+              >
+                <Plus className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Queue List */}
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {queue.map((video, index) => (
+              <div key={video.id} className="flex items-center gap-3 p-2 bg-white/5 rounded-lg">
+                <div className="flex items-center gap-2 flex-1">
+                  {getPlatformIcon(video.platform)}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-white text-sm truncate">{video.title}</div>
+                    <div className="text-white/50 text-xs">Added by {video.addedBy}</div>
+                  </div>
+                </div>
+                {isHost && (
+                  <Button
+                    onClick={() => handleRemoveFromQueue(video.id)}
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-400 hover:text-red-300 hover:bg-red-500/20"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
+                )}
+              </div>
+            ))}
+            {queue.length === 0 && <div className="text-white/50 text-center py-4">No videos in queue</div>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

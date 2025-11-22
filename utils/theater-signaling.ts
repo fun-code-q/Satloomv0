@@ -9,7 +9,7 @@ export interface TheaterSession {
   videoUrl: string
   videoType: "direct" | "youtube" | "vimeo" | "soundcloud"
   status: "waiting" | "loading" | "playing" | "paused" | "ended"
-  participants: string[]
+  participants: Array<{ id: string; name: string }>
   currentTime: number
   lastAction?: TheaterAction
   createdAt: number
@@ -127,7 +127,7 @@ export class TheaterSignaling {
       videoUrl,
       videoType,
       status: "waiting",
-      participants: [hostId],
+      participants: [{ id: hostId, name: hostName }],
       currentTime: 0,
       platform,
       createdAt: Date.now(),
@@ -143,7 +143,7 @@ export class TheaterSignaling {
     return sessionId
   }
 
-  async joinSession(roomId: string, sessionId: string, userId: string): Promise<boolean> {
+  async joinSession(roomId: string, sessionId: string, userId: string, userName: string): Promise<boolean> {
     if (!database) return false
 
     const sessionRef = ref(database, `rooms/${roomId}/theater/${sessionId}`)
@@ -160,9 +160,14 @@ export class TheaterSignaling {
         return false
       }
 
-      // Add user to participants if not already there
-      if (!session.participants.includes(userId)) {
-        const updatedParticipants = [...session.participants, userId]
+      // Ensure participants is an array (migration handling)
+      const currentParticipants = Array.isArray(session.participants) ? session.participants : []
+
+      // Check if user is already in participants (handle both string and object formats for backward compatibility)
+      const userExists = currentParticipants.some((p: any) => (typeof p === "string" ? p === userId : p.id === userId))
+
+      if (!userExists) {
+        const updatedParticipants = [...currentParticipants, { id: userId, name: userName }]
         await update(sessionRef, {
           participants: updatedParticipants,
         })
@@ -188,15 +193,40 @@ export class TheaterSignaling {
       }
 
       const session = snapshot.val()
-      const updatedParticipants = session.participants.filter((id: string) => id !== userId)
+
+      // Handle backward compatibility for participants
+      const currentParticipants = Array.isArray(session.participants) ? session.participants : []
+
+      // Filter out the leaving user
+      const updatedParticipants = currentParticipants.filter((p: any) =>
+        typeof p === "string" ? p !== userId : p.id !== userId,
+      )
 
       if (updatedParticipants.length === 0) {
         // Last participant left, end session
         await this.endSession(roomId, sessionId)
       } else {
-        await update(sessionRef, {
+        const updates: any = {
           participants: updatedParticipants,
-        })
+        }
+
+        // If the host left, assign new host
+        if (session.hostId === userId) {
+          const newHost = updatedParticipants[0]
+          // Handle both object and string formats
+          if (typeof newHost === "string") {
+            updates.hostId = newHost
+            updates.hostName = "Host" // Fallback name
+          } else {
+            updates.hostId = newHost.id
+            updates.hostName = newHost.name
+          }
+
+          // Also set hostActive to true to ensure the session stays alive
+          updates.hostActive = true
+        }
+
+        await update(sessionRef, updates)
       }
     } catch (error) {
       console.error("Error leaving session:", error)

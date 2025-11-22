@@ -37,7 +37,7 @@ import { useMediaQuery } from "@/hooks/use-media-query"
 import { QuizQuestionBubble } from "./quiz-question-bubble"
 import { QuizResultsBubble } from "./quiz-results-bubble"
 import { database } from "@/lib/firebase"
-import { onValue, ref } from "firebase/database"
+import { onValue, ref, set } from "firebase/database"
 
 interface ChatInterfaceProps {
   roomId: string
@@ -260,6 +260,22 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
       }
     })
 
+    // Listen for room status/existence to handle host destroying the room
+    const roomRef = ref(database, `rooms/${roomId}`)
+    const roomUnsubscribe = onValue(roomRef, (snapshot) => {
+      const roomData = snapshot.val()
+      // If room data is null (deleted) or explicitly marked as destroyed
+      if (!roomData || roomData.status === "destroyed") {
+        // If we are not the host, we need to leave
+        // (The host triggers the destruction so they handle their own exit via handleConfirmLeave)
+        if (!isHost) {
+          console.log("Room destroyed or removed, forcing exit for guest")
+          notificationSystem.info("The host has closed the room")
+          onLeave()
+        }
+      }
+    })
+
     // Listen for quiz sessions in the room
     const quizUnsubscribe = database
       ? onValue(ref(database, `rooms/${roomId}/quiz`), (snapshot) => {
@@ -322,6 +338,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
       callUnsubscribe()
       theaterUnsubscribe()
       quizUnsubscribe()
+      roomUnsubscribe()
       userPresence.setUserOffline(roomId, currentUserId)
       callSignaling.cleanup()
     }
@@ -335,6 +352,8 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     showPlayground,
     showQuizSetup,
     currentQuizSession,
+    isHost, // Include isHost in dependency array as it's used in roomUnsubscribe logic
+    onLeave, // Include onLeave as it's used in roomUnsubscribe logic
   ])
 
   const handleSendMessage = async () => {
@@ -481,6 +500,12 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             thumbsUp: [],
           },
         })
+
+        // Explicitly mark room as destroyed before actual removal (which happens in onLeave -> page.tsx)
+        // This ensures clients react fast even if the physical deletion takes a moment
+        if (database) {
+          await set(ref(database, `rooms/${roomId}/status`), "destroyed")
+        }
 
         // Give a small delay for the message to be sent
         setTimeout(() => {
@@ -675,16 +700,25 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     if (!theaterInvite) return
 
     try {
-      await theaterSignaling.joinSession(roomId, theaterInvite.sessionId, currentUserId)
-
-      const unsubscribe = theaterSignaling.listenForSession(roomId, theaterInvite.sessionId, (session) => {
-        setCurrentTheaterSession(session)
-        setShowTheaterFullscreen(true)
-        userPresence.updateActivity(roomId, currentUserId, "theater")
-      })
-
-      setIsTheaterHost(false)
-      setTheaterInvite(null)
+      const success = await theaterSignaling.joinSession(
+        theaterInvite.roomId,
+        theaterInvite.sessionId,
+        currentUserId,
+        userProfile.name,
+      )
+      if (success) {
+        const session = theaterSignaling.getCurrentSession() // Fetch the actual session data
+        if (session) {
+          setCurrentTheaterSession(session)
+          setShowTheaterFullscreen(true)
+          setTheaterInvite(null)
+          userPresence.updateActivity(roomId, currentUserId, "theater")
+        } else {
+          notificationSystem.error("Failed to get theater session details after joining")
+        }
+      } else {
+        notificationSystem.error("Failed to join theater session")
+      }
     } catch (error) {
       console.error("Error joining theater session:", error)
       notificationSystem.error("Failed to join theater session")
