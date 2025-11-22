@@ -205,6 +205,11 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     const messageUnsubscribe = messageStorage.listenForMessages(roomId, (newMessages) => {
       setMessages(newMessages)
 
+      if (showPlayground || showQuizSetup || currentQuizSession) {
+        setActiveGameInvite(null)
+        return
+      }
+
       // Process game invites from messages
       const gameInviteMessages = newMessages.filter(
         (msg) =>
@@ -337,7 +342,17 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
       userPresence.setUserOffline(roomId, currentUserId)
       callSignaling.cleanup()
     }
-  }, [roomId, currentUserId, userProfile, themeContext, declinedInvites, activeGameInvite])
+  }, [
+    roomId,
+    currentUserId,
+    userProfile,
+    themeContext,
+    declinedInvites,
+    activeGameInvite,
+    showPlayground,
+    showQuizSetup,
+    currentQuizSession,
+  ])
 
   const handleSendMessage = async () => {
     if (message.trim()) {
@@ -414,14 +429,15 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     setShowEmojiPicker(false)
   }
 
-  const handleStartMediaRecording = (mode: "audio" | "video" | "photo") => {
-    setMediaRecorderMode(mode)
+  // Handle media recording (audio/video messages)
+  const handleStartMediaRecording = (type: "audio" | "video" | "photo") => {
+    setMediaRecorderMode(type)
     setShowMediaRecorder(true)
 
     // Set recording indicators
-    if (mode === "audio") {
+    if (type === "audio") {
       userPresence.setRecordingVoice(roomId, currentUserId, true)
-    } else if (mode === "video") {
+    } else if (type === "video") {
       userPresence.setRecordingVideo(roomId, currentUserId, true)
     }
   }
@@ -519,14 +535,9 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
   const handleMessageDelete = async (messageId: string) => {
     console.log("Deleting message:", messageId)
-    try {
-      await messageStorage.deleteMessage(roomId, messageId)
-      setMessages((prev) => prev.filter((msg) => msg.id !== messageId))
-      notificationSystem.success("Message deleted")
-    } catch (error) {
-      console.error("Error deleting message:", error)
-      notificationSystem.error("Failed to delete message")
-    }
+    // Use the deleteMessage method from MessageStorage
+    await messageStorage.deleteMessage(roomId, messageId)
+    notificationSystem.success("Message deleted")
   }
 
   const handleMessageEdit = async (messageId: string, newText: string) => {
@@ -840,6 +851,8 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
       console.log("Accepting game invite:", activeGameInvite.id)
       console.log("Current user profile for joining:", userProfile)
 
+      setDeclinedInvites((prev) => new Set(prev).add(activeGameInvite.id))
+
       // Find the first available placeholder slot and update it with current user info
       let foundSlot = false
       const joiningConfig = {
@@ -872,7 +885,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
       setPlaygroundConfig(joiningConfig)
       setIsGameHost(false)
       setShowPlayground(true)
-      setActiveGameInvite(null)
+      setActiveGameInvite(null) // Explicitly clear active invite
       userPresence.updateActivity(roomId, currentUserId, "game")
 
       // Send a message to the chat that user joined
@@ -1108,6 +1121,19 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     )
   }
 
+  // Define handleFileSelect function
+  const handleFileSelect = (file: File | null) => {
+    if (file) {
+      console.log("File selected:", file.name, file.type)
+      // Here you would implement logic to handle the file upload.
+      // For example, upload to a storage service and then send a message
+      // with the file URL and metadata.
+      notificationSystem.info(`File "${file.name}" selected. Upload functionality not yet implemented.`)
+    } else {
+      console.log("File selection cancelled.")
+    }
+  }
+
   return (
     <div className="h-screen flex flex-col relative overflow-hidden">
       <SpaceBackground />
@@ -1261,7 +1287,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
       {/* Message Input */}
       <div className="p-2 md:p-4 bg-slate-900/80 backdrop-blur-sm border-t border-slate-700 relative">
         <div className="flex items-center gap-1 md:gap-2">
-          <AttachmentMenu onFileSelect={() => {}} />
+          <AttachmentMenu onFileSelect={handleFileSelect} />
 
           {/* Conditionally render media buttons based on screen size */}
           {isMobile ? (

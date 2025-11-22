@@ -163,6 +163,15 @@ export class GameSignaling {
             connected: true,
           }
         }
+        // If the player is already in the game (rejoining), update their connection status
+        if (player.id === playerId) {
+          playerAdded = true
+          return {
+            ...player,
+            name: playerName, // Ensure name is up to date
+            connected: true,
+          }
+        }
         return player
       })
 
@@ -175,8 +184,10 @@ export class GameSignaling {
       const updatedScores = { ...gameState.scores }
       if (slotIndex >= 0) {
         const oldPlayerId = gameState.players[slotIndex].id
-        delete updatedScores[oldPlayerId] // Remove old placeholder key
-        updatedScores[playerId] = 0 // Add new player key
+        if (oldPlayerId !== playerId) {
+          delete updatedScores[oldPlayerId] // Remove old placeholder key
+          updatedScores[playerId] = 0 // Add new player key
+        }
       }
 
       const updatedGameState = {
@@ -228,20 +239,6 @@ export class GameSignaling {
       (snapshot) => {
         if (snapshot.exists()) {
           const gameState = snapshot.val()
-          console.log("📡 Firebase multiplayer game update received:", {
-            firebasePath,
-            gameId: gameState.id,
-            roomId: gameState.roomId,
-            currentPlayerIndex: gameState.currentPlayerIndex,
-            currentPlayer: gameState.players?.[gameState.currentPlayerIndex]?.name,
-            gameStatus: gameState.gameStatus,
-            playersCount: gameState.players?.length || 0,
-            players: gameState.players?.map((p: any) => ({ id: p.id, name: p.name, isPlaceholder: p.isPlaceholder })),
-            activePlayerIds: gameState.activePlayerIds || [],
-            lastMoveTimestamp: gameState.lastMove?.timestamp,
-            lastMovePlayer: gameState.lastMove?.playerName,
-            hostId: gameState.hostId,
-          })
           onUpdate(gameState)
         } else {
           console.log("❌ No multiplayer game state in Firebase snapshot for path:", firebasePath)

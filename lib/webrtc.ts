@@ -5,12 +5,18 @@
  */
 export function createPeerConnection(): RTCPeerConnection {
   const pcConfig: RTCConfiguration = {
+    bundlePolicy: "max-bundle", // Added to use single port for audio/video
+    rtcpMuxPolicy: "require", // Added to require multiplexing
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun2.l.google.com:19302" },
       { urls: "stun:stun3.l.google.com:19302" },
       { urls: "stun:stun4.l.google.com:19302" },
+      { urls: "stun:stun.modulus.fe.up.pt:3478" },
+      { urls: "stun:stun.net-internals.com:3478" },
+      { urls: "stun:stun.nextcloud.com:3478" },
+      { urls: "stun:stun.nodezwolle.nl:3478" },
       {
         urls: "turn:openrelay.metered.ca:80",
         username: "openrelayproject",
@@ -70,9 +76,13 @@ export async function checkMediaPermissions(): Promise<{ audio: boolean; video: 
   }
 }
 
-export async function requestMediaPermissions(audio = true, video = true): Promise<MediaStream | null> {
+export async function requestMediaPermissions(
+  audio = true,
+  video = true,
+  facingMode: "user" | "environment" = "user",
+): Promise<MediaStream | null> {
   try {
-    console.log("Requesting media permissions:", { audio, video })
+    console.log("Requesting media permissions:", { audio, video, facingMode })
 
     const constraints: MediaStreamConstraints = {
       audio: audio
@@ -87,7 +97,7 @@ export async function requestMediaPermissions(audio = true, video = true): Promi
             width: { min: 320, ideal: 640, max: 1280 },
             height: { min: 240, ideal: 480, max: 720 },
             frameRate: { min: 15, ideal: 30, max: 60 },
-            facingMode: "user",
+            facingMode: facingMode,
           }
         : false,
     }
@@ -135,7 +145,7 @@ export async function requestMediaPermissions(audio = true, video = true): Promi
       console.log("Trying fallback constraints...")
       const fallbackConstraints: MediaStreamConstraints = {
         audio: audio,
-        video: video ? { width: 640, height: 480 } : false,
+        video: video ? { width: 640, height: 480, facingMode } : false, // added facingMode to fallback
       }
 
       console.log("Fallback constraints:", fallbackConstraints)

@@ -156,7 +156,7 @@ export class TheaterSignaling {
       }
 
       const session = snapshot.val()
-      if (session.status === "ended" || !session.hostActive) {
+      if (!session.hostActive) {
         return false
       }
 
@@ -262,6 +262,7 @@ export class TheaterSignaling {
       updateData.videoUrl = videoUrl
       updateData.platform = this.detectPlatform(videoUrl)
       updateData.status = "loading"
+      updateData.currentTime = 0
     }
 
     await update(sessionRef, this.cleanData(updateData))

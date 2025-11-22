@@ -1,11 +1,12 @@
 "use client"
 
 import type React from "react"
+import { Mic, MicOff, Phone, PhoneOff, Volume2, VolumeX, Minimize2, Maximize2 } from "lucide-react"
+import { CallSignaling, type CallData } from "@/utils/call-signaling"
+import { CallSounds } from "@/utils/call-sounds"
 
 import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Mic, MicOff, Phone, PhoneOff, Volume2, VolumeX, Minimize2, Maximize2 } from "lucide-react"
-import { CallSignaling, type CallData } from "@/utils/call-signaling"
 
 interface AudioCallModalProps {
   isOpen: boolean
@@ -41,19 +42,49 @@ export function AudioCallModal({
   const callTimerRef = useRef<NodeJS.Timeout>()
   const callSignaling = CallSignaling.getInstance()
 
+  const callDataRef = useRef<CallData | null>(null)
+  const roomIdRef = useRef<string>(roomId)
+
+  useEffect(() => {
+    callDataRef.current = callData
+    roomIdRef.current = roomId
+  }, [callData, roomId])
+
+  // Ensure cleanup on unmount (e.g. closing tab or navigating away)
+  useEffect(() => {
+    return () => {
+      const activeCall = callDataRef.current
+      if (activeCall && (activeCall.status === "answered" || activeCall.status === "ringing")) {
+        console.log("AudioCallModal unmounting with active call, cleaning up...")
+        CallSounds.getInstance().stopAll()
+        callSignaling.endCall(roomIdRef.current, activeCall.id).catch(console.error)
+      }
+    }
+  }, [])
+
   useEffect(() => {
     if (isOpen && callData?.status === "answered") {
+      // Stop any ringing sounds when call connects
+      CallSounds.getInstance().stopAll()
+
       callTimerRef.current = setInterval(() => {
         setCallDuration((prev) => prev + 1)
       }, 1000)
+    } else if (isOpen && !isIncoming && callData?.status === "ringing") {
+      // Play ringback tone for outgoing calls
+      CallSounds.getInstance().playRingback()
     }
 
     return () => {
       if (callTimerRef.current) {
         clearInterval(callTimerRef.current)
       }
+      // Ensure sounds stop if modal closes while ringing
+      if (callData?.status === "ringing") {
+        CallSounds.getInstance().stopAll()
+      }
     }
-  }, [isOpen, callData?.status])
+  }, [isOpen, callData?.status, isIncoming])
 
   // Handle media streams
   useEffect(() => {
@@ -117,6 +148,9 @@ export function AudioCallModal({
   }
 
   const handleEndCall = async () => {
+    // Play end call sound
+    CallSounds.getInstance().playEndCall()
+
     if (callData) {
       await callSignaling.endCall(roomId, callData.id)
     }

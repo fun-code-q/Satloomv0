@@ -87,6 +87,7 @@ export function TheaterFullscreen({
   const controlsTimeoutRef = useRef<NodeJS.Timeout>()
   const syncIntervalRef = useRef<NodeJS.Timeout>()
   const theaterSignaling = TheaterSignaling.getInstance()
+  const isProgrammaticUpdate = useRef<boolean>(false)
 
   // Auto-hide controls
   const resetControlsTimeout = useCallback(() => {
@@ -194,8 +195,10 @@ export function TheaterFullscreen({
             const state = event.data
             if (state === (window as any).YT.PlayerState.PLAYING) {
               setIsPlaying(true)
+              if (isHost) handlePlay(true)
             } else if (state === (window as any).YT.PlayerState.PAUSED) {
               setIsPlaying(false)
+              if (isHost) handlePause(true)
             }
           },
         },
@@ -225,8 +228,18 @@ export function TheaterFullscreen({
       if (iframe) {
         vimeoPlayerRef.current = new (window as any).Vimeo.Player(iframe)
 
-        vimeoPlayerRef.current.on("play", () => setIsPlaying(true))
-        vimeoPlayerRef.current.on("pause", () => setIsPlaying(false))
+        vimeoPlayerRef.current.on("play", () => {
+          if (!isProgrammaticUpdate.current) {
+            setIsPlaying(true)
+            if (isHost) handlePlay(true)
+          }
+        })
+        vimeoPlayerRef.current.on("pause", () => {
+          if (!isProgrammaticUpdate.current) {
+            setIsPlaying(false)
+            if (isHost) handlePause(true)
+          }
+        })
         vimeoPlayerRef.current.on("loaded", () => {
           vimeoPlayerRef.current.getDuration().then((duration: number) => {
             setDuration(duration)
@@ -268,8 +281,18 @@ export function TheaterFullscreen({
           })
         })
 
-        widget.bind((window as any).SC.Widget.Events.PLAY, () => setIsPlaying(true))
-        widget.bind((window as any).SC.Widget.Events.PAUSE, () => setIsPlaying(false))
+        widget.bind((window as any).SC.Widget.Events.PLAY, () => {
+          if (!isProgrammaticUpdate.current) {
+            setIsPlaying(true)
+            if (isHost) handlePlay(true)
+          }
+        })
+        widget.bind((window as any).SC.Widget.Events.PAUSE, () => {
+          if (!isProgrammaticUpdate.current) {
+            setIsPlaying(false)
+            if (isHost) handlePause(true)
+          }
+        })
 
         widget.bind((window as any).SC.Widget.Events.PLAY_PROGRESS, (data: any) => {
           setCurrentTime(data.currentPosition / 1000) // Convert to seconds
@@ -285,25 +308,70 @@ export function TheaterFullscreen({
     if (!video) return
 
     video.src = session.videoUrl
-    video.addEventListener("loadedmetadata", () => {
+
+    // Defined handlers to allow removal if needed, though mostly relying on React unmount
+    video.onloadedmetadata = () => {
       setDuration(video.duration)
-    })
-    video.addEventListener("timeupdate", () => {
+    }
+    video.ontimeupdate = () => {
       setCurrentTime(video.currentTime)
-    })
-    video.addEventListener("play", () => setIsPlaying(true))
-    video.addEventListener("pause", () => setIsPlaying(false))
+    }
+    video.onplay = () => {
+      if (!isProgrammaticUpdate.current) {
+        setIsPlaying(true)
+        if (isHost) handlePlay(true)
+      }
+    }
+    video.onpause = () => {
+      if (!isProgrammaticUpdate.current) {
+        setIsPlaying(false)
+        if (isHost) handlePause(true)
+      }
+    }
   }
 
   // Sync with session updates
   useEffect(() => {
+    if (session.status === "playing" && !isPlaying) {
+      handlePlay(false)
+    } else if (session.status === "paused" && isPlaying) {
+      handlePause(false)
+    }
+
+    const timeDiff = Math.abs(currentTime - session.currentTime)
+
+    // 1. If difference is > 2 seconds, do a hard seek (major drift or late join)
+    // 2. If difference is between 0.5 and 2 seconds, use playback rate to catch up smoothly (minor drift)
+    // 3. If difference is < 0.5 seconds, do nothing (acceptable jitter)
+    if (timeDiff > 2) {
+      handleSeek(session.currentTime, false)
+    } else if (timeDiff > 0.5 && session.status === "playing") {
+      const catchUpRate = currentTime < session.currentTime ? 1.05 : 0.95
+
+      // Apply temporary playback rate
+      if (videoRef.current) videoRef.current.playbackRate = catchUpRate
+      if (youtubePlayerRef.current?.setPlaybackRate) youtubePlayerRef.current.setPlaybackRate(catchUpRate)
+      if (vimeoPlayerRef.current?.setPlaybackRate) vimeoPlayerRef.current.setPlaybackRate(catchUpRate)
+
+      // Reset to normal speed after 1 second
+      setTimeout(() => {
+        if (videoRef.current) videoRef.current.playbackRate = 1.0
+        if (youtubePlayerRef.current?.setPlaybackRate) youtubePlayerRef.current.setPlaybackRate(1.0)
+        if (vimeoPlayerRef.current?.setPlaybackRate) vimeoPlayerRef.current.setPlaybackRate(1.0)
+      }, 1000)
+    }
+
     if (!session.lastAction) return
 
     const action = session.lastAction
-    const timeDiff = Date.now() - action.timestamp
 
     // Only sync if action is recent (within 5 seconds)
     if (timeDiff > 5000) return
+
+    // If I am the one who triggered the action, don't re-apply it from the server echo immediately
+    if (action.userId === currentUserId && timeDiff < 1000) return
+
+    isProgrammaticUpdate.current = true
 
     switch (action.type) {
       case "play":
@@ -318,7 +386,11 @@ export function TheaterFullscreen({
         }
         break
     }
-  }, [session.lastAction])
+
+    setTimeout(() => {
+      isProgrammaticUpdate.current = false
+    }, 500)
+  }, [session.lastAction, session.status, session.currentTime])
 
   // Update queue and raise hands
   useEffect(() => {
@@ -328,6 +400,8 @@ export function TheaterFullscreen({
 
   const handlePlay = async (sendAction = true) => {
     if (!playerReady) return
+
+    if (!sendAction) isProgrammaticUpdate.current = true
 
     const platform = session.platform || detectPlatform(session.videoUrl)
 
@@ -360,6 +434,12 @@ export function TheaterFullscreen({
       if (sendAction && isHost) {
         await theaterSignaling.sendAction(roomId, session.id, "play", currentTime, currentUserId, currentUser)
       }
+
+      if (!sendAction) {
+        setTimeout(() => {
+          isProgrammaticUpdate.current = false
+        }, 500)
+      }
     } catch (error) {
       console.error("Error playing video:", error)
     }
@@ -367,6 +447,8 @@ export function TheaterFullscreen({
 
   const handlePause = async (sendAction = true) => {
     if (!playerReady) return
+
+    if (!sendAction) isProgrammaticUpdate.current = true
 
     const platform = session.platform || detectPlatform(session.videoUrl)
 
@@ -399,12 +481,20 @@ export function TheaterFullscreen({
       if (sendAction && isHost) {
         await theaterSignaling.sendAction(roomId, session.id, "pause", currentTime, currentUserId, currentUser)
       }
+
+      if (!sendAction) {
+        setTimeout(() => {
+          isProgrammaticUpdate.current = false
+        }, 500)
+      }
     } catch (error) {
       console.error("Error pausing video:", error)
     }
   }
 
   const handleSeek = async (time: number, sendAction = true) => {
+    if (!sendAction) isProgrammaticUpdate.current = true
+
     const platform = session.platform || detectPlatform(session.videoUrl)
 
     switch (platform) {
@@ -430,6 +520,12 @@ export function TheaterFullscreen({
 
     if (sendAction && isHost) {
       await theaterSignaling.sendAction(roomId, session.id, "seek", time, currentUserId, currentUser)
+    }
+
+    if (!sendAction) {
+      setTimeout(() => {
+        isProgrammaticUpdate.current = false
+      }, 500)
     }
   }
 
@@ -589,6 +685,20 @@ export function TheaterFullscreen({
     if (isOpen && session.videoUrl) {
       const initPlayer = async () => {
         setPlayerReady(false)
+
+        if (youtubePlayerRef.current && youtubePlayerRef.current.destroy) {
+          try {
+            youtubePlayerRef.current.destroy()
+          } catch (e) {}
+          youtubePlayerRef.current = null
+        }
+        if (vimeoPlayerRef.current && vimeoPlayerRef.current.destroy) {
+          try {
+            vimeoPlayerRef.current.destroy()
+          } catch (e) {}
+          vimeoPlayerRef.current = null
+        }
+
         await initializePlayer()
         setPlayerReady(true)
       }
@@ -597,12 +707,16 @@ export function TheaterFullscreen({
 
     return () => {
       // Cleanup players
-      if (youtubePlayerRef.current) {
-        youtubePlayerRef.current.destroy()
+      if (youtubePlayerRef.current && youtubePlayerRef.current.destroy) {
+        try {
+          youtubePlayerRef.current.destroy()
+        } catch (e) {}
         youtubePlayerRef.current = null
       }
-      if (vimeoPlayerRef.current) {
-        vimeoPlayerRef.current.destroy()
+      if (vimeoPlayerRef.current && vimeoPlayerRef.current.destroy) {
+        try {
+          vimeoPlayerRef.current.destroy()
+        } catch (e) {}
         vimeoPlayerRef.current = null
       }
       if (soundcloudWidget) {

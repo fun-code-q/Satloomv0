@@ -16,12 +16,44 @@ export class WebRTCSignaling {
   private localStreams: Map<string, MediaStream> = new Map()
   private remoteStreams: Map<string, MediaStream> = new Map()
   private signalListeners: Map<string, () => void> = new Map()
+  private roomIds: Map<string, string> = new Map()
+  private candidateQueues: Map<string, RTCIceCandidate[]> = new Map()
 
   static getInstance(): WebRTCSignaling {
     if (!WebRTCSignaling.instance) {
       WebRTCSignaling.instance = new WebRTCSignaling()
     }
     return WebRTCSignaling.instance
+  }
+
+  private async handleIceCandidate(callId: string, candidate: RTCIceCandidate) {
+    const peerConnection = this.peerConnections.get(callId)
+    if (!peerConnection) return
+
+    if (!peerConnection.remoteDescription && peerConnection.signalingState !== "stable") {
+      console.log("Buffering ICE candidate (remote description not set)")
+      const queue = this.candidateQueues.get(callId) || []
+      queue.push(candidate)
+      this.candidateQueues.set(callId, queue)
+    } else {
+      console.log("Adding ICE candidate immediately")
+      await peerConnection.addIceCandidate(candidate).catch((e) => console.error("Error adding candidate:", e))
+    }
+  }
+
+  private async flushCandidateQueue(callId: string) {
+    const peerConnection = this.peerConnections.get(callId)
+    const queue = this.candidateQueues.get(callId)
+
+    if (peerConnection && queue && queue.length > 0) {
+      console.log(`Flushing ${queue.length} buffered ICE candidates`)
+      for (const candidate of queue) {
+        await peerConnection
+          .addIceCandidate(candidate)
+          .catch((e) => console.error("Error adding buffered candidate:", e))
+      }
+      this.candidateQueues.delete(callId)
+    }
   }
 
   async startCall(
@@ -31,11 +63,19 @@ export class WebRTCSignaling {
     remoteUserId: string,
     isVideo = false,
   ): Promise<MediaStream> {
+    let localStream: MediaStream | null = null
+
     try {
+      if (this.peerConnections.has(callId)) {
+        console.log("WebRTC call already started:", callId)
+        const existingStream = this.localStreams.get(callId)
+        if (existingStream) return existingStream
+      }
+
       console.log("Starting WebRTC call:", { callId, localUserId, remoteUserId, isVideo })
 
       // Request media permissions with explicit video constraints
-      const localStream = await requestMediaPermissions(true, isVideo)
+      localStream = await requestMediaPermissions(true, isVideo, "user")
       if (!localStream) {
         throw new Error("Failed to get local media stream")
       }
@@ -59,6 +99,7 @@ export class WebRTCSignaling {
       // Create peer connection
       const peerConnection = createPeerConnection()
       this.peerConnections.set(callId, peerConnection)
+      this.roomIds.set(callId, roomId)
 
       // Add local stream tracks to peer connection with explicit handling
       localStream.getTracks().forEach((track) => {
@@ -110,6 +151,9 @@ export class WebRTCSignaling {
       // Monitor connection state
       peerConnection.onconnectionstatechange = () => {
         console.log("Connection state changed:", peerConnection.connectionState)
+        if (peerConnection.connectionState === "failed") {
+          console.warn("Connection failed - network issues likely")
+        }
       }
 
       peerConnection.oniceconnectionstatechange = () => {
@@ -138,6 +182,11 @@ export class WebRTCSignaling {
       return localStream
     } catch (error) {
       console.error("Error starting WebRTC call:", error)
+      // Cleanup local stream if an error occurs during setup
+      if (localStream) {
+        stopMediaStream(localStream)
+        this.localStreams.delete(callId)
+      }
       throw error
     }
   }
@@ -149,11 +198,19 @@ export class WebRTCSignaling {
     remoteUserId: string,
     isVideo = false,
   ): Promise<MediaStream> {
+    let localStream: MediaStream | null = null
+
     try {
+      if (this.peerConnections.has(callId)) {
+        console.log("WebRTC call already answered:", callId)
+        const existingStream = this.localStreams.get(callId)
+        if (existingStream) return existingStream
+      }
+
       console.log("Answering WebRTC call:", { callId, localUserId, remoteUserId, isVideo })
 
       // Request media permissions with explicit video constraints
-      const localStream = await requestMediaPermissions(true, isVideo)
+      localStream = await requestMediaPermissions(true, isVideo, "user")
       if (!localStream) {
         throw new Error("Failed to get local media stream")
       }
@@ -177,6 +234,7 @@ export class WebRTCSignaling {
       // Create peer connection
       const peerConnection = createPeerConnection()
       this.peerConnections.set(callId, peerConnection)
+      this.roomIds.set(callId, roomId)
 
       // Add local stream tracks to peer connection with explicit handling
       localStream.getTracks().forEach((track) => {
@@ -240,6 +298,60 @@ export class WebRTCSignaling {
       return localStream
     } catch (error) {
       console.error("Error answering WebRTC call:", error)
+      // Cleanup local stream if an error occurs during setup
+      if (localStream) {
+        stopMediaStream(localStream)
+        this.localStreams.delete(callId)
+      }
+      throw error
+    }
+  }
+
+  async switchCamera(callId: string, facingMode: "user" | "environment"): Promise<MediaStream> {
+    try {
+      const peerConnection = this.peerConnections.get(callId)
+      const currentStream = this.localStreams.get(callId)
+
+      if (!peerConnection || !currentStream) {
+        throw new Error("Call not found or stream not available")
+      }
+
+      console.log("Switching camera to:", facingMode)
+
+      // Stop existing video track
+      currentStream.getVideoTracks().forEach((track) => {
+        track.stop()
+        currentStream.removeTrack(track)
+      })
+
+      // Request new video track
+      const newStream = await requestMediaPermissions(false, true, facingMode)
+      if (!newStream) throw new Error("Failed to get new camera stream")
+
+      const newVideoTrack = newStream.getVideoTracks()[0]
+      if (!newVideoTrack) throw new Error("No video track found in new stream")
+
+      // Replace track in peer connection
+      const senders = peerConnection.getSenders()
+      const videoSender = senders.find((s) => s.track?.kind === "video")
+
+      if (videoSender) {
+        console.log("Replacing video track in sender")
+        await videoSender.replaceTrack(newVideoTrack)
+      } else {
+        console.log("Adding new video track to peer connection")
+        peerConnection.addTrack(newVideoTrack, currentStream)
+      }
+
+      // Add new track to current stream (to keep audio track and reference same)
+      currentStream.addTrack(newVideoTrack)
+
+      // Clean up temp stream
+      newStream.removeTrack(newVideoTrack)
+
+      return currentStream
+    } catch (error) {
+      console.error("Error switching camera:", error)
       throw error
     }
   }
@@ -291,6 +403,8 @@ export class WebRTCSignaling {
               console.log("Received offer with SDP:", signal.data.sdp?.substring(0, 200) + "...")
               await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.data))
 
+              await this.flushCandidateQueue(callId)
+
               // Create answer with video constraints
               const answer = await peerConnection.createAnswer({
                 offerToReceiveAudio: true,
@@ -319,13 +433,15 @@ export class WebRTCSignaling {
 
               console.log("Received answer with SDP:", signal.data.sdp?.substring(0, 200) + "...")
               await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.data))
+
+              await this.flushCandidateQueue(callId)
               break
             }
 
             /* ---------- ICE CANDIDATE ---------- */
             case "ice-candidate": {
               console.log("Received ICE candidate")
-              await peerConnection.addIceCandidate(new RTCIceCandidate(signal.data))
+              await this.handleIceCandidate(callId, new RTCIceCandidate(signal.data))
               break
             }
           }
@@ -340,6 +456,8 @@ export class WebRTCSignaling {
 
   endCall(callId: string): void {
     console.log("Ending WebRTC call:", callId)
+
+    this.candidateQueues.delete(callId)
 
     // Stop local stream
     const localStream = this.localStreams.get(callId)
@@ -369,11 +487,15 @@ export class WebRTCSignaling {
       this.signalListeners.delete(callId)
     }
 
+    const roomId = this.roomIds.get(callId)
+
     // Clean up Firebase data
-    if (database) {
-      const webrtcRef = ref(database, `webrtc/${callId}`)
+    if (database && roomId) {
+      const webrtcRef = ref(database, `webrtc/${roomId}/${callId}`)
       remove(webrtcRef).catch(console.error)
     }
+
+    this.roomIds.delete(callId)
   }
 
   getLocalStream(callId: string): MediaStream | null {

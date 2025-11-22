@@ -143,6 +143,10 @@ export class CallSignaling {
     return this.webrtcSignaling.getLocalStream(callId)
   }
 
+  async switchCamera(callId: string, facingMode: "user" | "environment"): Promise<MediaStream> {
+    return this.webrtcSignaling.switchCamera(callId, facingMode)
+  }
+
   getRemoteStream(callId: string): MediaStream | null {
     return this.webrtcSignaling.getRemoteStream(callId)
   }
@@ -183,8 +187,9 @@ export class CallSignaling {
               callData.participants.length > 1
             ) {
               const remoteUserId = callData.participants.find((p) => p !== currentUserId)
-              if (remoteUserId) {
+              if (remoteUserId && !this.webrtcSignaling.getLocalStream(callData.id)) {
                 try {
+                  console.log("Starting WebRTC connection for answered call")
                   await this.webrtcSignaling.startCall(
                     roomId,
                     callData.id,

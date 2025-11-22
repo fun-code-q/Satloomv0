@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Phone, PhoneOff, User } from "lucide-react"
 import type { CallData } from "@/utils/call-signaling"
+import { CallSounds } from "@/utils/call-sounds"
 
 interface IncomingCallNotificationProps {
   call: CallData
@@ -15,13 +16,20 @@ export function IncomingCallNotification({ call, onAnswer, onDecline }: Incoming
   const [isVisible, setIsVisible] = useState(true)
 
   useEffect(() => {
+    // Play ringtone when component mounts
+    CallSounds.getInstance().playRingtone()
+
     // Auto-hide after 30 seconds
     const timer = setTimeout(() => {
       setIsVisible(false)
       onDecline()
     }, 30000)
 
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      // Stop ringtone when component unmounts (answered, declined, or timed out)
+      CallSounds.getInstance().stopAll()
+    }
   }, [onDecline])
 
   if (!isVisible) return null

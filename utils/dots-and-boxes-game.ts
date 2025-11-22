@@ -716,32 +716,8 @@ export class DotsAndBoxesGame {
     }
   }
 
-  private getTotalMovesPlayed(): number {
-    let moves = 0
-
-    // Count horizontal lines
-    for (let row = 0; row <= this.gridSize; row++) {
-      for (let col = 0; col < this.gridSize; col++) {
-        if (this.gameState.horizontalLines[row][col].isDrawn) {
-          moves++
-        }
-      }
-    }
-
-    // Count vertical lines
-    for (let row = 0; row < this.gridSize; row++) {
-      for (let col = 0; col <= this.gridSize; col++) {
-        if (this.gameState.verticalLines[row][col].isDrawn) {
-          moves++
-        }
-      }
-    }
-
-    return moves
-  }
-
-  private getAvailableMoves(): Array<{ type: "horizontal" | "vertical"; row: number; col: number }> {
-    const moves: Array<{ type: "horizontal" | "vertical"; row: number; col: number }> = []
+  private getAvailableMoves(): { type: "horizontal" | "vertical"; row: number; col: number }[] {
+    const moves: { type: "horizontal" | "vertical"; row: number; col: number }[] = []
 
     // Horizontal lines
     for (let row = 0; row <= this.gridSize; row++) {
@@ -764,35 +740,11 @@ export class DotsAndBoxesGame {
     return moves
   }
 
-  public joinPlayer(slotIndex: number, playerId: string, playerName: string): boolean {
-    try {
-      if (slotIndex < 0 || slotIndex >= this.gameState.players.length) {
-        return false
-      }
-
-      const player = this.gameState.players[slotIndex]
-      if (!player.isPlaceholder || player.isComputer) {
-        return false
-      }
-
-      // Update the player slot
-      this.gameState.players[slotIndex] = {
-        ...player,
-        id: playerId,
-        name: playerName,
-        initials: playerName.substring(0, 2).toUpperCase(),
-        isPlaceholder: false,
-        connected: true,
-      }
-
-      // Initialize score for the new player
-      this.gameState.scores[playerId] = 0
-
-      console.log(`Player ${playerName} joined slot ${slotIndex}`)
-      return true
-    } catch (err) {
-      console.error(`Error joining player: ${err}`)
-      return false
-    }
+  private getTotalMovesPlayed(): number {
+    let moves = 0
+    // Count all drawn lines
+    this.gameState.horizontalLines.forEach((row) => row.forEach((line) => line.isDrawn && moves++))
+    this.gameState.verticalLines.forEach((row) => row.forEach((line) => line.isDrawn && moves++))
+    return moves
   }
 }

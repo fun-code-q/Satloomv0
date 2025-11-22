@@ -4,8 +4,9 @@ import type React from "react"
 
 import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
-import { Mic, MicOff, Video, VideoOff, Phone, PhoneOff, Minimize2, Maximize2, Camera, CameraOff } from "lucide-react"
+import { Mic, MicOff, Video, VideoOff, Phone, PhoneOff, Minimize2, Maximize2, CameraOff, RefreshCw } from "lucide-react"
 import { CallSignaling, type CallData } from "@/utils/call-signaling"
+import { CallSounds } from "@/utils/call-sounds"
 
 interface VideoCallModalProps {
   isOpen: boolean
@@ -36,6 +37,7 @@ export function VideoCallModal({
   const [connectionStatus, setConnectionStatus] = useState<string>("Connecting...")
   const [localStreamReady, setLocalStreamReady] = useState(false)
   const [remoteStreamReady, setRemoteStreamReady] = useState(false)
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user")
 
   const modalRef = useRef<HTMLDivElement>(null)
   const localVideoRef = useRef<HTMLVideoElement>(null)
@@ -45,19 +47,58 @@ export function VideoCallModal({
   const currentLocalStream = useRef<MediaStream | null>(null)
   const currentRemoteStream = useRef<MediaStream | null>(null)
 
+  const callDataRef = useRef<CallData | null>(null)
+  const roomIdRef = useRef<string>(roomId)
+
+  useEffect(() => {
+    callDataRef.current = callData
+    roomIdRef.current = roomId
+  }, [callData, roomId])
+
+  // Ensure cleanup on unmount (e.g. closing tab or navigating away)
+  useEffect(() => {
+    return () => {
+      const activeCall = callDataRef.current
+      if (activeCall && (activeCall.status === "answered" || activeCall.status === "ringing")) {
+        console.log("VideoCallModal unmounting with active call, cleaning up...")
+        CallSounds.getInstance().stopAll()
+        callSignaling.endCall(roomIdRef.current, activeCall.id).catch(console.error)
+
+        // Also ensure local streams are stopped explicitly if needed
+        if (currentLocalStream.current) {
+          currentLocalStream.current.getTracks().forEach((t) => t.stop())
+        }
+      }
+    }
+  }, [])
+
+  const handleMinimize = () => {
+    setIsMinimized(true)
+  }
+
   useEffect(() => {
     if (isOpen && callData?.status === "answered") {
+      // Stop ringing when answered
+      CallSounds.getInstance().stopAll()
+
       callTimerRef.current = setInterval(() => {
         setCallDuration((prev) => prev + 1)
       }, 1000)
+    } else if (isOpen && !isIncoming && callData?.status === "ringing") {
+      // Play ringback for outgoing calls
+      CallSounds.getInstance().playRingback()
     }
 
     return () => {
       if (callTimerRef.current) {
         clearInterval(callTimerRef.current)
       }
+      // Cleanup sounds
+      if (callData?.status === "ringing") {
+        CallSounds.getInstance().stopAll()
+      }
     }
-  }, [isOpen, callData?.status])
+  }, [isOpen, callData?.status, isIncoming])
 
   // Enhanced video setup function with better debugging
   const setupVideoElement = useCallback(
@@ -256,6 +297,9 @@ export function VideoCallModal({
   }
 
   const handleEndCall = async () => {
+    // Play end call sound
+    CallSounds.getInstance().playEndCall()
+
     if (callData) {
       await callSignaling.endCall(roomId, callData.id)
     }
@@ -263,6 +307,7 @@ export function VideoCallModal({
     setConnectionStatus("Connecting...")
     setLocalStreamReady(false)
     setRemoteStreamReady(false)
+    setFacingMode("user")
     currentLocalStream.current = null
     currentRemoteStream.current = null
     onClose()
@@ -280,15 +325,27 @@ export function VideoCallModal({
     }
   }
 
-  const handleMinimize = () => {
-    setIsMinimized(true)
-    setLocalStreamReady(false)
-    setRemoteStreamReady(false)
-  }
-
   const handleMaximize = () => {
     setIsMinimized(false)
     // Streams will be restored by the useEffect
+  }
+
+  const handleSwitchCamera = async () => {
+    if (!callData) return
+
+    try {
+      const newMode = facingMode === "user" ? "environment" : "user"
+      const updatedStream = await callSignaling.switchCamera(callData.id, newMode)
+
+      setFacingMode(newMode)
+      currentLocalStream.current = updatedStream
+
+      if (localVideoRef.current) {
+        await setupVideoElement(localVideoRef.current, updatedStream, true)
+      }
+    } catch (error) {
+      console.error("Failed to switch camera:", error)
+    }
   }
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -402,7 +459,7 @@ export function VideoCallModal({
             autoPlay
             muted
             playsInline
-            style={{ transform: "scaleX(-1)" }}
+            style={{ transform: facingMode === "user" ? "scaleX(-1)" : "none" }}
           />
 
           {!isVideoOn && (
@@ -486,7 +543,7 @@ export function VideoCallModal({
           />
 
           {/* Local video (picture-in-picture) */}
-          <div className="absolute top-3 right-3 w-20 h-15 sm:w-24 sm:h-18 bg-slate-800 rounded-lg overflow-hidden border border-slate-600 shadow-lg">
+          <div className="absolute top-3 right-3 w-20 h-15 sm:w-24 sm:h-18 bg-slate-800 rounded-lg overflow-hidden border border-slate-600 shadow-lg group">
             <video
               ref={localVideoRef}
               className="w-full h-full object-cover"
@@ -495,12 +552,25 @@ export function VideoCallModal({
               playsInline
               style={{
                 backgroundColor: "#475569",
-                transform: "scaleX(-1)", // Mirror effect for local video
+                transform: facingMode === "user" ? "scaleX(-1)" : "none", // only mirror for user facing camera
               }}
             />
             {!isVideoOn && (
               <div className="absolute inset-0 bg-slate-700 flex items-center justify-center">
                 <CameraOff className="w-4 h-4 text-gray-400" />
+              </div>
+            )}
+
+            {isVideoOn && (
+              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="w-8 h-8 rounded-full text-white hover:bg-white/20"
+                  onClick={handleSwitchCamera}
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
               </div>
             )}
           </div>
@@ -563,33 +633,39 @@ export function VideoCallModal({
                   variant="ghost"
                   size="icon"
                   className={`rounded-full w-10 h-10 ${
-                    isMuted ? "bg-red-500/20 text-red-400" : "bg-slate-700 text-white"
+                    isMuted ? "bg-red-500/20 text-red-400" : "bg-slate-700 text-white hover:bg-slate-600"
                   }`}
                   onClick={() => setIsMuted(!isMuted)}
                 >
-                  {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
                 </Button>
 
                 <Button
                   variant="ghost"
                   size="icon"
                   className={`rounded-full w-10 h-10 ${
-                    !isVideoOn ? "bg-red-500/20 text-red-400" : "bg-slate-700 text-white"
+                    !isVideoOn ? "bg-red-500/20 text-red-400" : "bg-slate-700 text-white hover:bg-slate-600"
                   }`}
                   onClick={() => setIsVideoOn(!isVideoOn)}
                 >
-                  {isVideoOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
+                  {!isVideoOn ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
                 </Button>
 
-                <Button variant="ghost" size="icon" className="rounded-full w-10 h-10 bg-slate-700 text-white">
-                  <Camera className="w-4 h-4" />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full w-10 h-10 bg-slate-700 text-white hover:bg-slate-600 md:hidden"
+                  onClick={handleSwitchCamera}
+                  disabled={!isVideoOn}
+                >
+                  <RefreshCw className="w-5 h-5" />
                 </Button>
 
                 <Button
                   onClick={handleEndCall}
                   className="bg-red-500 hover:bg-red-600 text-white rounded-full w-10 h-10"
                 >
-                  <PhoneOff className="w-4 h-4" />
+                  <PhoneOff className="w-5 h-5" />
                 </Button>
               </>
             )}
