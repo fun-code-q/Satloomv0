@@ -314,6 +314,25 @@ export function DotsAndBoxesGameComponent({
     })
 
     gameListenerRef.current = unsubscribe
+
+    if (isMultiplayer && !isHost) {
+      const hostDisconnectUnsubscribe = gameSignaling.listenForGameHostDisconnection(roomId, gameId, () => {
+        console.log("👑 Host left the game - ending for all players")
+        notificationSystem.error("Host left the game. Ending game for all players.")
+
+        // Clean up and exit
+        setTimeout(() => {
+          cleanup()
+          onExit()
+        }, 2000)
+      })
+
+      // Store unsubscribe function to clean up later
+      return () => {
+        unsubscribe()
+        hostDisconnectUnsubscribe()
+      }
+    }
   }
 
   // Handle AI turns for both single and multiplayer

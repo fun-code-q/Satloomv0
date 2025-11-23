@@ -336,6 +336,54 @@ export class GameSignaling {
     }
   }
 
+  listenForGameHostDisconnection(roomId: string, gameId: string, onHostLeft: () => void): () => void {
+    if (!database) {
+      console.warn("Firebase database not initialized")
+      return () => {}
+    }
+
+    const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
+    const listenerId = `host_disconnect_${roomId}_${gameId}`
+
+    console.log("🔗 Setting up host disconnection listener for game:", gameId)
+
+    const unsubscribe = onValue(
+      gameRef,
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          // Game was deleted/ended
+          console.log("🗑️ Game no longer exists - host left or game ended")
+          onHostLeft()
+          return
+        }
+
+        const gameState = snapshot.val()
+
+        // Check if host player exists and is still connected
+        const hostPlayer = gameState.players?.find((p: any) => p.isHost)
+
+        if (!hostPlayer) {
+          console.log("❌ No host player found - ending game for all")
+          onHostLeft()
+        } else if (hostPlayer.connected === false) {
+          console.log("❌ Host disconnected - ending game for all")
+          onHostLeft()
+        }
+      },
+      (error) => {
+        console.error("❌ Host disconnection listener error:", error)
+      },
+    )
+
+    this.listeners.set(listenerId, unsubscribe)
+
+    return () => {
+      console.log("🔌 Unsubscribing from host disconnection listener")
+      unsubscribe()
+      this.listeners.delete(listenerId)
+    }
+  }
+
   // Legacy methods for backward compatibility
   async createGame(roomId: string, gameState: GameState): Promise<void> {
     return this.createMultiplayerGame(roomId, gameState.id, gameState)

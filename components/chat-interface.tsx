@@ -1167,8 +1167,6 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   const handleExitPlayground = async () => {
-    await sendSystemMessage("Left the game.")
-
     setShowPlayground(false)
     setPlaygroundConfig(null)
     setIsGameHost(false)
@@ -1177,6 +1175,24 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     // Reset declined invites so user can be invited again
     // Not strictly necessary to reset here, but good for a clean slate
     setDeclinedInvites(new Set())
+
+    if (isGameHost && playgroundConfig?.mode === "multiplayer" && playgroundConfig?.sharedGameId) {
+      const gameId = playgroundConfig.sharedGameId
+
+      // Notify all players
+      await sendSystemMessage("Ended the game.")
+
+      // End the game in Firebase
+      try {
+        await GameSignaling.getInstance().endMultiplayerGame(roomId, gameId)
+        console.log("🗑️ Host ended multiplayer game for all players")
+      } catch (error) {
+        console.error("❌ Error ending multiplayer game:", error)
+      }
+    } else if (!isGameHost) {
+      // Non-host player leaving
+      await sendSystemMessage("Left the game.")
+    }
 
     userPresence.updateActivity(roomId, currentUserId, "chat")
   }
