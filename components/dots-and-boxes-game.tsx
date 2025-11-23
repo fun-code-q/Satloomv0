@@ -287,20 +287,8 @@ export function DotsAndBoxesGameComponent({
         try {
           // Update the local game instance with the new state
           const localGame = localGameRef.current
-          const localState = localGame.getGameState()
 
-          // Sync critical game state properties
-          Object.assign(localState, {
-            players: updatedState.players,
-            currentPlayerIndex: updatedState.currentPlayerIndex,
-            horizontalLines: updatedState.horizontalLines,
-            verticalLines: updatedState.verticalLines,
-            boxes: updatedState.boxes,
-            scores: updatedState.scores,
-            gameStatus: updatedState.gameStatus,
-            winner: updatedState.winner,
-            lastMove: updatedState.lastMove,
-          })
+          localGame.syncState(updatedState)
 
           console.log("🔄 Local game instance synced with Firebase state")
         } catch (error) {

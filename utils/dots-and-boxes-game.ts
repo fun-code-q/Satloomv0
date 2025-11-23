@@ -15,6 +15,7 @@ export interface GameState {
   gridSize: number
   difficulty: "easy" | "medium" | "hard"
   voiceChatEnabled: boolean
+  activePlayerIds?: string[]
 }
 
 export interface Player {
@@ -416,6 +417,29 @@ export class DotsAndBoxesGame {
 
   public getGameState(): GameState {
     return { ...this.gameState }
+  }
+
+  public syncState(newState: GameState): void {
+    try {
+      // Update all critical state properties
+      this.gameState.players = newState.players
+      this.gameState.currentPlayerIndex = newState.currentPlayerIndex
+      this.gameState.grid = newState.grid
+      this.gameState.horizontalLines = newState.horizontalLines
+      this.gameState.verticalLines = newState.verticalLines
+      this.gameState.boxes = newState.boxes
+      this.gameState.scores = newState.scores
+      this.gameState.gameStatus = newState.gameStatus
+      this.gameState.winner = newState.winner
+      this.gameState.lastMove = newState.lastMove
+
+      // Also update optional properties if they exist in the new state
+      if (newState.activePlayerIds) {
+        this.gameState.activePlayerIds = newState.activePlayerIds
+      }
+    } catch (err) {
+      console.error(`Error syncing game state: ${err}`)
+    }
   }
 
   public makeComputerMove(): boolean {
