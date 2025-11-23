@@ -38,6 +38,7 @@ export function VideoCallModal({
   const [localStreamReady, setLocalStreamReady] = useState(false)
   const [remoteStreamReady, setRemoteStreamReady] = useState(false)
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user")
+  const [isAnswering, setIsAnswering] = useState(false)
 
   const modalRef = useRef<HTMLDivElement>(null)
   const localVideoRef = useRef<HTMLVideoElement>(null)
@@ -316,11 +317,13 @@ export function VideoCallModal({
   const handleAnswerCall = async () => {
     if (callData) {
       try {
+        setIsAnswering(true)
         setConnectionStatus("Connecting...")
         await callSignaling.answerCall(roomId, callData.id, currentUserId)
       } catch (error) {
         console.error("Error answering call:", error)
         setConnectionStatus("Connection failed")
+        setIsAnswering(false)
       }
     }
   }
@@ -609,7 +612,7 @@ export function VideoCallModal({
         <div className="p-3 bg-slate-800/50 border-t border-slate-700 flex-shrink-0">
           <div className="flex justify-center gap-3 flex-wrap">
             {/* Incoming Call Actions */}
-            {isIncoming && callData?.status === "ringing" && (
+            {isIncoming && callData?.status === "ringing" && !isAnswering && (
               <>
                 <Button
                   onClick={handleEndCall}
@@ -620,6 +623,7 @@ export function VideoCallModal({
                 <Button
                   onClick={handleAnswerCall}
                   className="bg-green-500 hover:bg-green-600 text-white rounded-full w-10 h-10"
+                  disabled={isAnswering}
                 >
                   <Phone className="w-5 h-5" />
                 </Button>

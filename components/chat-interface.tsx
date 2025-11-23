@@ -933,13 +933,13 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
   const handleAnswerVideoCall = async () => {
     if (incomingCall) {
-      await sendSystemMessage("Joined the video call.")
-
-      await callSignaling.answerCall(roomId, incomingCall.id, currentUserId)
       setCurrentCall(incomingCall)
       setIsInCall(true)
       setShowVideoCall(true)
       setIncomingCall(null)
+
+      await sendSystemMessage("Joined the video call.")
+      await callSignaling.answerCall(roomId, incomingCall.id, currentUserId)
     }
   }
 
