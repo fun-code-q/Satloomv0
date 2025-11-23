@@ -904,11 +904,12 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     if (incomingCall) {
       await sendSystemMessage("Joined the audio call.")
 
-      await callSignaling.answerCall(roomId, incomingCall.id, currentUserId)
       setCurrentCall(incomingCall)
       setIsInCall(true)
       setShowAudioCall(true)
       setIncomingCall(null)
+
+      await callSignaling.answerCall(roomId, incomingCall.id, currentUserId)
     }
   }
 

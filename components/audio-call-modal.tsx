@@ -35,6 +35,7 @@ export function AudioCallModal({
   const [position, setPosition] = useState({ x: 20, y: 20 })
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
   const [connectionStatus, setConnectionStatus] = useState<string>("Connecting...")
+  const [isAnswering, setIsAnswering] = useState(false)
 
   const modalRef = useRef<HTMLDivElement>(null)
   const localAudioRef = useRef<HTMLAudioElement>(null)
@@ -160,13 +161,15 @@ export function AudioCallModal({
   }
 
   const handleAnswerCall = async () => {
-    if (callData) {
+    if (callData && !isAnswering) {
       try {
+        setIsAnswering(true)
         setConnectionStatus("Connecting...")
         await callSignaling.answerCall(roomId, callData.id, currentUserId)
       } catch (error) {
         console.error("Error answering call:", error)
         setConnectionStatus("Connection failed")
+        setIsAnswering(false)
       }
     }
   }
@@ -255,6 +258,12 @@ export function AudioCallModal({
       document.removeEventListener("touchend", handleTouchEnd)
     }
   }, [isDragging])
+
+  useEffect(() => {
+    if (callData?.status === "answered") {
+      setIsAnswering(false)
+    }
+  }, [callData?.status])
 
   if (!isOpen) return null
 
@@ -356,7 +365,8 @@ export function AudioCallModal({
               </Button>
               <Button
                 onClick={handleAnswerCall}
-                className="bg-green-500 hover:bg-green-600 text-white rounded-full w-16 h-16"
+                disabled={isAnswering}
+                className="bg-green-500 hover:bg-green-600 text-white rounded-full w-16 h-16 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Phone className="w-6 h-6" />
               </Button>
