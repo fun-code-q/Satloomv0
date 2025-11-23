@@ -1440,7 +1440,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
       {/* Header - Fixed and responsive */}
       <div className="px-4 py-3 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700 flex items-center justify-between shrink-0 z-10">
         <div className="flex items-center gap-3">
-          <div className="hidden md:block">
+          <div className="flex-shrink-0">
             <AnimatedLogo />
           </div>
           <div className="hidden md:flex items-center gap-2 text-xs md:text-sm">
