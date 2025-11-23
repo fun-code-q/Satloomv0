@@ -9,7 +9,7 @@ export interface TheaterSession {
   videoUrl: string
   videoType: "direct" | "youtube" | "vimeo" | "soundcloud"
   status: "waiting" | "loading" | "playing" | "paused" | "ended"
-  participants: Array<{ id: string; name: string }>
+  participants: { id: string; name: string }[]
   currentTime: number
   lastAction?: TheaterAction
   createdAt: number
@@ -160,13 +160,13 @@ export class TheaterSignaling {
         return false
       }
 
-      // Ensure participants is an array (migration handling)
       const currentParticipants = Array.isArray(session.participants) ? session.participants : []
 
-      // Check if user is already in participants (handle both string and object formats for backward compatibility)
-      const userExists = currentParticipants.some((p: any) => (typeof p === "string" ? p === userId : p.id === userId))
+      const isAlreadyParticipant = currentParticipants.some((p: any) =>
+        typeof p === "string" ? p === userId : p.id === userId,
+      )
 
-      if (!userExists) {
+      if (!isAlreadyParticipant) {
         const updatedParticipants = [...currentParticipants, { id: userId, name: userName }]
         await update(sessionRef, {
           participants: updatedParticipants,
@@ -193,37 +193,28 @@ export class TheaterSignaling {
       }
 
       const session = snapshot.val()
-
-      // Handle backward compatibility for participants
       const currentParticipants = Array.isArray(session.participants) ? session.participants : []
 
-      // Filter out the leaving user
       const updatedParticipants = currentParticipants.filter((p: any) =>
         typeof p === "string" ? p !== userId : p.id !== userId,
       )
 
       if (updatedParticipants.length === 0) {
-        // Last participant left, end session
         await this.endSession(roomId, sessionId)
       } else {
         const updates: any = {
           participants: updatedParticipants,
         }
 
-        // If the host left, assign new host
         if (session.hostId === userId) {
           const newHost = updatedParticipants[0]
-          // Handle both object and string formats
           if (typeof newHost === "string") {
             updates.hostId = newHost
-            updates.hostName = "Host" // Fallback name
+            updates.hostName = "New Host"
           } else {
             updates.hostId = newHost.id
             updates.hostName = newHost.name
           }
-
-          // Also set hostActive to true to ensure the session stays alive
-          updates.hostActive = true
         }
 
         await update(sessionRef, updates)
@@ -273,7 +264,6 @@ export class TheaterSignaling {
     } else if (type === "pause") {
       updateData.status = "paused"
     } else if (type === "raise_hand") {
-      // Increment raise hand count
       try {
         const snapshot = await get(sessionRef)
         if (snapshot.exists()) {
@@ -314,7 +304,6 @@ export class TheaterSignaling {
     const inviteRef = ref(database, `rooms/${roomId}/theaterInvites/${invite.id}`)
     await set(inviteRef, this.cleanData(invite))
 
-    // Auto-remove invite after 30 seconds
     setTimeout(async () => {
       try {
         await remove(inviteRef)
@@ -346,7 +335,6 @@ export class TheaterSignaling {
       }),
     )
 
-    // Clean up after 5 minutes
     setTimeout(
       async () => {
         try {
@@ -376,7 +364,6 @@ export class TheaterSignaling {
         this.currentSession = session
         callback(session)
 
-        // If session ended, notify all participants
         if (session.status === "ended" || !session.hostActive) {
           setTimeout(() => {
             callback({ ...session, status: "ended" })
@@ -385,14 +372,12 @@ export class TheaterSignaling {
       }
     })
 
-    // Store cleanup function
     if (this.sessions.has(key)) {
       this.sessions.get(key)!()
     }
     this.sessions.set(key, unsubscribe)
     this.theaterListeners.push(unsubscribe)
 
-    // Return cleanup function
     return () => {
       unsubscribe()
       this.sessions.delete(key)
@@ -411,7 +396,6 @@ export class TheaterSignaling {
       const invites = snapshot.val()
       if (invites) {
         Object.values(invites).forEach((invite: any) => {
-          // Only show invites from other users
           if (invite.hostId !== userId) {
             onInvite(invite)
           }
@@ -423,7 +407,6 @@ export class TheaterSignaling {
     return unsubscribe
   }
 
-  // Get current session
   getCurrentSession(): TheaterSession | null {
     return this.currentSession
   }
@@ -442,7 +425,6 @@ export class TheaterSignaling {
 
       const sessions = snapshot.val()
 
-      // Find the most recent active session
       const activeSessions = Object.entries(sessions)
         .map(([id, session]: [string, any]) => ({
           ...session,
@@ -458,7 +440,6 @@ export class TheaterSignaling {
     }
   }
 
-  // Clean up listeners
   cleanup() {
     this.theaterListeners.forEach((unsubscribe) => unsubscribe())
     this.theaterListeners = []

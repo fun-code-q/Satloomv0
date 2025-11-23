@@ -2,7 +2,6 @@
 
 import type React from "react"
 import { createContext, useContext, useEffect, useState } from "react"
-import { NotificationSystem } from "@/utils/notification-system"
 
 type Theme = "dark" | "light"
 
@@ -63,12 +62,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Save notification settings
   useEffect(() => {
     localStorage.setItem("satloom-notifications", notifications.toString())
-    NotificationSystem.getInstance().setNotificationsEnabled(notifications)
   }, [notifications])
 
   useEffect(() => {
     localStorage.setItem("satloom-notification-sound", notificationSound.toString())
-    NotificationSystem.getInstance().setSoundEnabled(notificationSound)
   }, [notificationSound])
 
   const toggleTheme = () => {

@@ -119,9 +119,8 @@ export class CallSounds {
   }
 
   async playBeep() {
-    this.initAudioContext()
-    // Sharp beep
-    await this.playTone(1000, 0.3, "sine", 0.15)
+    // Sharp notification beep
+    await this.playTone(880, 0.1, "square", 0.1)
   }
 
   stopAll() {

@@ -121,6 +121,18 @@ export function MessageBubble({
   const isVideo = message.file?.type.startsWith("video/")
   const isAudio = message.file?.type.startsWith("audio/")
 
+  const isSystemMessage = message.type === "system" || message.sender === "System"
+
+  if (isSystemMessage) {
+    return (
+      <div className="flex justify-center mb-4 w-full">
+        <div className="bg-slate-800/80 text-gray-400 text-xs px-4 py-1.5 rounded-full border border-slate-700/50 shadow-sm backdrop-blur-sm text-center max-w-[80%]">
+          {message.text}
+        </div>
+      </div>
+    )
+  }
+
   const renderFilePreview = () => {
     if (!message.file) return null
 
@@ -184,19 +196,6 @@ export function MessageBubble({
   }
 
   const processedText = parseEmojis(message.text)
-
-  if (message.type === "system" || message.sender === "System") {
-    return (
-      <div className="flex justify-center my-4 w-full">
-        <div className="bg-slate-800/50 px-4 py-1.5 rounded-full text-xs text-gray-400 font-medium flex items-center gap-2 border border-slate-700/50">
-          <span className="opacity-70">
-            {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </span>
-          <span>{message.text}</span>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div className={`flex ${isOwnMessage ? "justify-end" : "justify-start"} mb-4`}>
