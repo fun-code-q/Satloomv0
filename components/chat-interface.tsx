@@ -192,8 +192,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     try {
       await messageStorage.sendMessage(roomId, {
         text,
-        sender: userProfile.name, // Use user's name as sender
-        senderId: currentUserId, // Add senderId so we identify it as own message
+        sender: "System",
         timestamp: new Date(),
         type: "system",
         reactions: {
@@ -226,7 +225,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
     if (!hasJoinedRef.current) {
       hasJoinedRef.current = true
-      sendSystemMessage(`${userProfile.name} joined the room.`) // Added username
+      sendSystemMessage("Joined the room.")
     }
 
     // Initialize systems
@@ -574,31 +573,20 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     }
   }, [roomMood, currentMusicIndex])
 
-  const handleSaveMood = async (config: MoodConfig) => {
-    if (!database) return
-
+  const handleSaveMood = async (mood: MoodConfig | null) => {
     try {
-      await update(ref(database, `rooms/${roomId}/mood`), config)
-      setShowMoodSetup(false)
-      await sendSystemMessage(`${userProfile.name} updated the room mood.`) // Added username
-      notificationSystem.success("Room mood updated!")
+      if (database) {
+        await update(ref(database, `rooms/${roomId}`), { mood })
+
+        if (mood) {
+          await sendSystemMessage("Updated the room mood.")
+        } else {
+          await sendSystemMessage("Reset the room mood to default.")
+        }
+      }
     } catch (error) {
       console.error("Error saving mood:", error)
       notificationSystem.error("Failed to save mood settings")
-    }
-  }
-
-  const handleResetMood = async () => {
-    if (!database) return
-
-    try {
-      await update(ref(database, `rooms/${roomId}/mood`), null)
-      setShowMoodSetup(false)
-      await sendSystemMessage(`${userProfile.name} reset the room mood to default.`) // Added username
-      notificationSystem.success("Room mood reset!")
-    } catch (error) {
-      console.error("Error resetting mood:", error)
-      notificationSystem.error("Failed to reset mood settings")
     }
   }
 
@@ -743,13 +731,47 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   const handleConfirmLeave = async () => {
-    // Explicitly leave theater session first if active
+    setShowLeaveConfirmation(false)
+
+    await sendSystemMessage("Left the room.")
+
     if (currentTheaterSessionRef.current) {
       await theaterSignaling.leaveSession(roomId, currentTheaterSessionRef.current.id, currentUserId)
     }
 
-    await sendSystemMessage(`${userProfile.name} left the room.`) // Added username
-    onLeave()
+    if (isHost) {
+      try {
+        // Notify all users that the room is being destroyed
+        await messageStorage.sendMessage(roomId, {
+          text: "⚠️ Room is being destroyed by the host. You will be disconnected.",
+          sender: "System",
+          timestamp: new Date(),
+          type: "system",
+          reactions: {
+            heart: [],
+            thumbsUp: [],
+          },
+        })
+
+        if (database) {
+          await update(ref(database, `rooms/${roomId}`), { status: "destroyed" })
+        }
+
+        // Give a small delay for the message to be sent
+        setTimeout(() => {
+          // Destroy room logic would go here (e.g., removing room data from Firebase)
+          // For now, we'll just redirect everyone out
+          onLeave()
+        }, 2000)
+      } catch (error) {
+        console.error("Error destroying room:", error)
+        notificationSystem.error("Failed to destroy room")
+        onLeave()
+      }
+    } else {
+      // Regular user just leaves
+      onLeave()
+    }
   }
 
   // Message interaction handlers
@@ -803,14 +825,14 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
   // Call handling functions
   const handleStartAudioCall = async () => {
-    if (showAudioCall) return
+    await sendSystemMessage("Started an audio call.")
 
     try {
-      await sendSystemMessage(`${userProfile.name} started an audio call.`) // Added username
-      setShowAudioCall(true)
+      console.log("Starting audio call...")
       const callId = await callSignaling.startCall(roomId, userProfile.name, currentUserId, "audio")
+      console.log("Audio call started with ID:", callId)
 
-      setCurrentCall({
+      const newCall: CallData = {
         id: callId,
         roomId: roomId,
         callerId: currentUserId,
@@ -819,7 +841,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         timestamp: new Date(),
         status: "ringing",
         participants: [currentUserId],
-      })
+      }
 
       // Start WebRTC connection for caller
       const otherUsers = onlineUsers.filter((user) => user.id !== currentUserId)
@@ -827,23 +849,24 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         const remoteUserId = otherUsers[0].id
         await callSignaling.initiateWebRTCCall(roomId, callId, currentUserId, remoteUserId, false)
       }
+
+      setShowAudioCall(true)
       userPresence.updateActivity(roomId, currentUserId, "call")
     } catch (error) {
       console.error("Error starting audio call:", error)
       notificationSystem.error("Failed to start audio call")
-      setShowAudioCall(false) // Close modal on error
     }
   }
 
   const handleStartVideoCall = async () => {
-    if (showVideoCall) return
+    await sendSystemMessage("Started a video call.")
 
     try {
-      await sendSystemMessage(`${userProfile.name} started a video call.`) // Added username
-      setShowVideoCall(true)
+      console.log("Starting video call...")
       const callId = await callSignaling.startCall(roomId, userProfile.name, currentUserId, "video")
+      console.log("Video call started with ID:", callId)
 
-      setCurrentCall({
+      const newCall: CallData = {
         id: callId,
         roomId: roomId,
         callerId: currentUserId,
@@ -852,7 +875,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         timestamp: new Date(),
         status: "ringing",
         participants: [currentUserId],
-      })
+      }
 
       // Start WebRTC connection for caller
       const otherUsers = onlineUsers.filter((user) => user.id !== currentUserId)
@@ -860,11 +883,12 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         const remoteUserId = otherUsers[0].id
         await callSignaling.initiateWebRTCCall(roomId, callId, currentUserId, remoteUserId, true)
       }
+
+      setShowVideoCall(true)
       userPresence.updateActivity(roomId, currentUserId, "video-call")
     } catch (error) {
       console.error("Error starting video call:", error)
       notificationSystem.error("Failed to start video call")
-      setShowVideoCall(false) // Close modal on error
     }
   }
 
@@ -877,98 +901,62 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   const handleAnswerCall = async () => {
-    if (!incomingCall) return
+    if (incomingCall) {
+      await sendSystemMessage("Joined the audio call.")
 
-    try {
-      await callSignaling.joinCall(roomId, incomingCall.id, currentUserId)
-
+      await callSignaling.answerCall(roomId, incomingCall.id, currentUserId)
       setCurrentCall(incomingCall)
       setIsInCall(true)
-
-      if (incomingCall.type === "video") {
-        setShowVideoCall(true)
-        await sendSystemMessage(`${userProfile.name} joined the video call.`) // Added username
-      } else {
-        setShowAudioCall(true)
-        await sendSystemMessage(`${userProfile.name} joined the audio call.`) // Added username
-      }
-
+      setShowAudioCall(true)
       setIncomingCall(null)
-    } catch (error) {
-      console.error("Error answering call:", error)
-      notificationSystem.error("Failed to answer call")
     }
   }
 
   const handleDeclineCall = () => {
     if (incomingCall) {
-      callSignaling.rejectCall(roomId, incomingCall.id, currentUserId)
+      // notificationSystem.info("Call declined") // Optional: maybe generic logs?
       setIncomingCall(null)
-      notificationSystem.info(`Call from ${incomingCall.caller} declined.`)
     }
   }
 
-  const handleEndCall = async () => {
+  const handleEndCall = () => {
     if (currentCall) {
-      await callSignaling.leaveCall(roomId, currentCall.id, currentUserId)
-      if (currentCall.type === "video") {
-        sendSystemMessage(`${userProfile.name} left the video call.`) // Added username
-      } else {
-        sendSystemMessage(`${userProfile.name} left the audio call.`) // Added username
-      }
-    }
+      sendSystemMessage("Left the audio call.")
 
+      callSignaling.endCall(roomId, currentCall.id, currentUserId)
+    }
     setShowAudioCall(false)
-    setShowVideoCall(false)
-    setCurrentCall(null)
     setIsInCall(false)
-    userPresence.updateActivity(roomId, currentUserId, "chat")
+    setCurrentCall(null)
   }
 
   const handleAnswerVideoCall = async () => {
-    if (!incomingCall) return
+    if (incomingCall) {
+      await sendSystemMessage("Joined the video call.")
 
-    try {
-      await callSignaling.joinCall(roomId, incomingCall.id, currentUserId)
-
+      await callSignaling.answerCall(roomId, incomingCall.id, currentUserId)
       setCurrentCall(incomingCall)
       setIsInCall(true)
-
-      // If we're answering a video call, make sure to set the state
-      if (currentCall.type === "video") {
-        setShowVideoCall(true)
-        await sendSystemMessage(`${userProfile.name} joined the video call.`) // Added username
-      } else {
-        setShowAudioCall(true)
-        await sendSystemMessage(`${userProfile.name} joined the audio call.`) // Added username
-      }
-
+      setShowVideoCall(true)
       setIncomingCall(null)
-    } catch (error) {
-      console.error("Error answering video call:", error)
-      notificationSystem.error("Failed to answer video call")
     }
   }
 
-  const handleEndVideoCall = async () => {
+  const handleEndVideoCall = () => {
     if (currentCall) {
-      await callSignaling.leaveCall(roomId, currentCall.id, currentUserId)
-      if (currentCall.type === "video") {
-        sendSystemMessage(`${userProfile.name} left the video call.`) // Added username
-      } else {
-        sendSystemMessage(`${userProfile.name} left the audio call.`) // Added username
-      }
-    }
+      sendSystemMessage("Left the video call.")
 
-    setShowAudioCall(false)
+      callSignaling.endCall(roomId, currentCall.id, currentUserId)
+    }
     setShowVideoCall(false)
-    setCurrentCall(null)
     setIsInCall(false)
-    userPresence.updateActivity(roomId, currentUserId, "chat")
+    setCurrentCall(null)
   }
 
   const handleCreateTheaterSession = async (videoUrl: string, videoType: "youtube" | "vimeo" | "direct") => {
     try {
+      await sendSystemMessage("Started a movie theater session.")
+
       const sessionId = await theaterSignaling.createSession(
         roomId,
         userProfile.name,
@@ -985,8 +973,6 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
       await theaterSignaling.sendInvite(roomId, sessionId, userProfile.name, currentUserId, videoTitle)
 
-      await sendSystemMessage(`${userProfile.name} started a movie theater session.`) // Added username
-
       if (theaterSessionUnsubscribeRef.current) theaterSessionUnsubscribeRef.current()
       theaterSessionUnsubscribeRef.current = theaterSignaling.listenForSession(roomId, sessionId, (session) => {
         setCurrentTheaterSession(session)
@@ -1000,7 +986,6 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         setShowTheaterFullscreen(true)
         userPresence.updateActivity(roomId, currentUserId, "theater")
       }
-      setShowTheaterSetup(false)
     } catch (error) {
       console.error("Error creating theater session:", error)
       notificationSystem.error("Failed to create theater session")
@@ -1010,6 +995,8 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   const handleAcceptTheaterInvite = async () => {
     if (theaterInvite) {
       try {
+        await sendSystemMessage("Joined the theater.")
+
         const success = await theaterSignaling.joinSession(
           roomId,
           theaterInvite.sessionId,
@@ -1030,15 +1017,15 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
           (session) => {
             setCurrentTheaterSession(session)
             setIsTheaterHost(session.hostId === currentUserId)
+            setShowTheaterFullscreen(true)
+            userPresence.updateActivity(roomId, currentUserId, "theater")
           },
         )
 
-        setShowTheaterInvite(null)
-        setShowTheaterFullscreen(true)
-        await sendSystemMessage(`${userProfile.name} joined the theater.`) // Added username
-        userPresence.updateActivity(roomId, currentUserId, "theater")
+        setIsTheaterHost(false)
+        setTheaterInvite(null)
       } catch (error) {
-        console.error("Failed to join theater session:", error)
+        console.error("Error joining theater session:", error)
         notificationSystem.error("Failed to join theater session")
       }
     }
@@ -1056,9 +1043,10 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     }
 
     if (currentTheaterSession) {
+      await sendSystemMessage("Left the theater.")
+
       // Use leaveSession for everyone, including host (migration will handle it)
       await theaterSignaling.leaveSession(roomId, currentTheaterSession.id, currentUserId)
-      await sendSystemMessage(`${userProfile.name} left the theater.`) // Added username
     }
 
     setShowTheaterFullscreen(false)
@@ -1068,22 +1056,118 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   const handleStartPlaygroundGame = async (config: GameConfig) => {
-    try {
-      await gameSignaling.createGame(roomId, currentUserId, userProfile.name, config)
-      setPlaygroundConfig(config)
-      setShowPlayground(true)
-      setIsGameHost(true)
-      setShowPlaygroundSetup(false)
+    setShowPlaygroundSetup(false)
+    setPlaygroundConfig(config)
+    setIsGameHost(true)
 
-      await sendSystemMessage(`${userProfile.name} started a game of ${config.gameType}.`) // Added username
+    await sendSystemMessage(`Started a game of ${config.gameType}.`)
+
+    try {
+      // Create game invite logic
+      if (config.mode === "single") {
+        // Single player mode - start immediately with AI
+        setShowPlayground(true)
+        userPresence.updateActivity(roomId, currentUserId, "game")
+        notificationSystem.success("Game started against AI!")
+      } else {
+        // Multiplayer mode
+        const aiCount = config.players.filter((p) => p.isAI).length
+        const humanCount = config.players.filter((p) => !p.isAI).length
+
+        if (humanCount === 1) {
+          // Only host is human, all others are AI - no need to send invitation
+          const gameMessage =
+            aiCount === 1
+              ? `🎮 ${userProfile.name} started playing Dots & Boxes against 1 AI opponent.`
+              : `🎮 ${userProfile.name} started playing Dots & Boxes against ${aiCount} AI opponents.`
+
+          await messageStorage.sendMessage(roomId, {
+            text: gameMessage,
+            sender: "System",
+            timestamp: new Date(),
+            type: "system",
+            reactions: {
+              heart: [],
+              thumbsUp: [],
+            },
+          })
+
+          setShowPlayground(true)
+          userPresence.updateActivity(roomId, currentUserId, "game")
+          notificationSystem.success(`Game started against ${aiCount} AI!`)
+        } else {
+          // There are other human players - send invitation
+          const sharedGameId = `game_${roomId}_${Date.now()}`
+
+          // Create a multiplayer config with placeholder slots
+          const multiplayerConfig = {
+            ...config,
+            sharedGameId,
+            players: config.players.map((player, index) => {
+              if (index === 0) {
+                // Host keeps their info with actual user ID and name
+                console.log("Setting host player:", { id: currentUserId, name: userProfile.name })
+                return {
+                  ...player,
+                  id: currentUserId,
+                  name: userProfile.name, // Use actual user profile name
+                }
+              } else if (player.isAI) {
+                // AI players keep their info
+                return player
+              } else {
+                // Human players become placeholder slots
+                return {
+                  ...player,
+                  id: `placeholder_${index}`,
+                  name: `Player ${index + 1}`,
+                  isPlaceholder: true,
+                }
+              }
+            }),
+          }
+
+          console.log("Created multiplayer config:", multiplayerConfig)
+
+          const gameInvite: GameInvite = {
+            id: sharedGameId,
+            roomId,
+            hostId: currentUserId,
+            hostName: userProfile.name,
+            gameConfig: multiplayerConfig,
+            timestamp: Date.now(),
+            status: "active",
+          }
+
+          await messageStorage.sendMessage(roomId, {
+            text: `🎮 ${userProfile.name} started a ${config.gameType} multiplayer game! Click to join.`,
+            sender: "System",
+            timestamp: new Date(),
+            type: "game-invite",
+            gameInvite: gameInvite,
+            reactions: {
+              heart: [],
+              thumbsUp: [],
+            },
+          })
+
+          // Start the game for the host with the multiplayer config
+          setPlaygroundConfig(multiplayerConfig)
+          setIsGameHost(true)
+          setShowPlayground(true)
+          userPresence.updateActivity(roomId, currentUserId, "game")
+
+          notificationSystem.success("Multiplayer game started! Waiting for other players to join.")
+        }
+      }
     } catch (error) {
-      console.error("Failed to start game:", error)
+      console.error("Error starting playground game:", error)
       notificationSystem.error("Failed to start game")
     }
   }
 
   const handleExitPlayground = async () => {
-    await sendSystemMessage(`${userProfile.name} left the game.`) // Added username
+    await sendSystemMessage("Left the game.")
 
     setShowPlayground(false)
     setPlaygroundConfig(null)
@@ -1097,29 +1181,23 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     userPresence.updateActivity(roomId, currentUserId, "chat")
   }
 
-  const handleJoinGame = async (invite: GameInvite) => {
-    try {
-      const success = await gameSignaling.joinGame(roomId, invite.id, currentUserId, userProfile.name)
-      if (success) {
-        setPlaygroundConfig(invite.gameConfig)
-        setShowPlayground(true)
-        setIsGameHost(false)
-        setActiveGameInvite(invite)
-        await sendSystemMessage(`${userProfile.name} joined the game.`) // Added username
-      } else {
-        notificationSystem.error("Failed to join game (might be full or ended)")
-      }
-    } catch (error) {
-      console.error("Error joining game:", error)
-      notificationSystem.error("Failed to join game")
-    }
-  }
-
   const handleAcceptGameInvite = async () => {
     if (activeGameInvite) {
-      await handleJoinGame(activeGameInvite)
-      // Clear the active invite after accepting
+      await sendSystemMessage("Joined the game.")
+
+      setPlaygroundConfig(activeGameInvite.gameConfig)
+      setShowPlayground(true)
+      setIsGameHost(false)
+
+      // Notify host
+      // No explicit message needed here, the game component will handle host communication
+
+      // Remove the invite from the list and clear active invite
+      setGameInvites((prev) => prev.filter((inv) => inv.id !== activeGameInvite.id))
       setActiveGameInvite(null)
+      userPresence.updateActivity(roomId, currentUserId, "game")
+
+      notificationSystem.success(`Joined the game as ${userProfile.name}!`)
     }
   }
 
@@ -1166,29 +1244,67 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     { icon: Info, label: "About", action: () => setShowAbout(true) },
   ]
 
-  const handleStartQuiz = async (config: {
-    title: string
-    description: string
-    timePerQuestion: number
-    questions: any[]
-  }) => {
-    try {
-      const sessionId = await quizSystem.createQuizSession(
-        roomId,
-        config,
-        userProfile.name, // hostName
-        currentUserId, // hostId
-      )
+  const handleStartQuiz = async () => {
+    setShowQuizSetup(false)
 
-      setShowQuizSetup(false)
-      // Auto-join the host
-      await quizSystem.joinQuizSession(roomId, sessionId, currentUserId)
+    await sendSystemMessage("Started a quiz.")
 
-      await sendSystemMessage(`${userProfile.name} started a quiz.`) // Added username
-    } catch (error) {
-      console.error("Failed to start quiz:", error)
-      notificationSystem.error("Failed to start quiz")
-    }
+    // Create quiz session
+    const sessionId = await quizSystem.createQuizSession(roomId, currentUserId, userProfile.name)
+
+    // Start listening
+    const unsubscribe = quizSystem.listenForQuizSession(roomId, sessionId, (session) => {
+      setCurrentQuizSession((prev) => {
+        if (prev && prev.currentQuestionIndex !== session.currentQuestionIndex) {
+          setQuizTimeRemaining(session.timePerQuestion)
+          setUserQuizAnswer("")
+          setShowQuizResults(false)
+
+          // Clear old timer
+          if (quizTimerRef.current) {
+            clearInterval(quizTimerRef.current)
+            quizTimerRef.current = null
+          }
+        }
+        return session
+      })
+
+      if (session.status === "active" && !quizTimerRef.current) {
+        setQuizTimeRemaining(session.timePerQuestion)
+
+        quizTimerRef.current = setInterval(() => {
+          setQuizTimeRemaining((prev) => {
+            const newTime = prev - 1
+            if (newTime <= 0) {
+              if (quizTimerRef.current) {
+                clearInterval(quizTimerRef.current)
+                quizTimerRef.current = null
+              }
+              return 0
+            }
+            return newTime
+          })
+        }, 1000)
+      }
+
+      if (session.status === "finished") {
+        if (quizTimerRef.current) {
+          clearInterval(quizTimerRef.current)
+          quizTimerRef.current = null
+        }
+        setShowQuizResults(true)
+      }
+    })
+
+    // Listen for quiz answers
+    quizSystem.listenForQuizAnswers(roomId, sessionId, (answers) => {
+      setQuizAnswers(answers)
+    })
+
+    // Start the quiz
+    await quizSystem.startQuiz(roomId, sessionId)
+
+    notificationSystem.success("Quiz started!")
   }
 
   useEffect(() => {
@@ -1252,25 +1368,23 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
   const handleQuizExit = async () => {
     if (currentQuizSession) {
-      // 1. Add to exited set FIRST to prevent auto-rejoin
       exitedQuizSessionsRef.current.add(currentQuizSession.id)
 
-      const sessionId = currentQuizSession.id
-
-      // 2. Clear local state immediately for UI responsiveness
       setCurrentQuizSession(null)
+      setQuizAnswers([])
+      setUserQuizAnswer("")
       setShowQuizResults(false)
       if (quizTimerRef.current) {
         clearInterval(quizTimerRef.current)
         quizTimerRef.current = null
       }
 
-      // 3. Perform network operations in background
+      // Perform background cleanup operations
       try {
-        await sendSystemMessage(`${userProfile.name} left the quiz.`) // Added username
-        await quizSystem.removeParticipant(roomId, sessionId, currentUserId)
+        await sendSystemMessage("Left the quiz.")
+        await quizSystem.removeParticipant(roomId, currentQuizSession.id, currentUserId)
       } catch (error) {
-        console.error("Error leaving quiz:", error)
+        console.error("Error exiting quiz:", error)
       }
     }
   }
@@ -1610,7 +1724,6 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         onClose={() => setShowMoodSetup(false)}
         currentMood={roomMood}
         onSave={handleSaveMood}
-        onReset={handleResetMood}
       />
 
       {/* Full-screen overlays */}

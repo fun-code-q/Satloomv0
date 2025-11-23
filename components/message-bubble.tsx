@@ -11,7 +11,6 @@ export interface Message {
   id: string
   text: string
   sender: string
-  senderId?: string // Added senderId to interface
   timestamp: Date
   replyTo?: {
     id: string
@@ -125,15 +124,10 @@ export function MessageBubble({
   const isSystemMessage = message.type === "system" || message.sender === "System"
 
   if (isSystemMessage) {
-    let displayText = message.text
-    if (isOwnMessage) {
-      displayText = displayText.replace(message.sender, "You")
-    }
-
     return (
       <div className="flex justify-center mb-4 w-full">
         <div className="bg-slate-800/80 text-gray-400 text-xs px-4 py-1.5 rounded-full border border-slate-700/50 shadow-sm backdrop-blur-sm text-center max-w-[80%]">
-          {displayText}
+          {message.text}
         </div>
       </div>
     )
