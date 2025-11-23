@@ -1440,12 +1440,14 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
       {/* Header - Fixed and responsive */}
       <div className="px-4 py-3 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700 flex items-center justify-between shrink-0 z-10">
         <div className="flex items-center gap-3">
-          <AnimatedLogo />
-          <div className="flex items-center gap-2 text-xs md:text-sm">
+          <div className="hidden md:block">
+            <AnimatedLogo />
+          </div>
+          <div className="hidden md:flex items-center gap-2 text-xs md:text-sm">
             <Users className="w-3 h-3 md:w-4 md:h-4 text-gray-400" />
             <span className="text-gray-400 whitespace-nowrap">{onlineUsers.length} online</span>
           </div>
-          <div className="text-xs text-gray-500 truncate">Room: {roomId}</div>
+          <div className="hidden md:block text-xs text-gray-500 truncate">Room: {roomId}</div>
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
