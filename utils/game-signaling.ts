@@ -1,5 +1,5 @@
 import { database } from "@/lib/firebase"
-import { ref, set, onValue, remove, get, update } from "firebase/database"
+import { ref, set, onValue, remove, get, update, off } from "firebase/database"
 import type { GameState, Move } from "./dots-and-boxes-game"
 
 export class GameSignaling {
@@ -157,7 +157,7 @@ export class GameSignaling {
           return {
             ...player,
             id: playerId,
-            name: playerName, // Use the actual player name from their profile
+            name: playerName,
             initials: playerName.substring(0, 2).toUpperCase(),
             isPlaceholder: false,
             connected: true,
@@ -168,7 +168,7 @@ export class GameSignaling {
           playerAdded = true
           return {
             ...player,
-            name: playerName, // Ensure name is up to date
+            name: playerName,
             connected: true,
           }
         }
@@ -185,8 +185,8 @@ export class GameSignaling {
       if (slotIndex >= 0) {
         const oldPlayerId = gameState.players[slotIndex].id
         if (oldPlayerId !== playerId) {
-          delete updatedScores[oldPlayerId] // Remove old placeholder key
-          updatedScores[playerId] = 0 // Add new player key
+          delete updatedScores[oldPlayerId]
+          updatedScores[playerId] = 0
         }
       }
 
@@ -249,7 +249,6 @@ export class GameSignaling {
       },
     )
 
-    // Store the unsubscribe function
     this.gameListeners.set(listenerId, unsubscribe)
 
     return () => {
@@ -336,6 +335,7 @@ export class GameSignaling {
     }
   }
 
+  // FIXED: Enhanced host disconnection detection
   listenForGameHostDisconnection(roomId: string, gameId: string, onHostLeft: () => void): () => void {
     if (!database) {
       console.warn("Firebase database not initialized")
@@ -345,30 +345,51 @@ export class GameSignaling {
     const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
     const listenerId = `host_disconnect_${roomId}_${gameId}`
 
-    console.log("🔗 Setting up host disconnection listener for game:", gameId)
+    console.log("🔗 Setting up enhanced host disconnection listener for game:", gameId)
 
     const unsubscribe = onValue(
       gameRef,
       (snapshot) => {
         if (!snapshot.exists()) {
-          // Game was deleted/ended
-          console.log("🗑️ Game no longer exists - host left or game ended")
+          // Game was deleted - host definitely left
+          console.log("🗑️ Game deleted from Firebase - host left the game")
           onHostLeft()
           return
         }
 
         const gameState = snapshot.val()
-
-        // Check if host player exists and is still connected
-        const hostPlayer = gameState.players?.find((p: any) => p.isHost)
-
-        if (!hostPlayer) {
-          console.log("❌ No host player found - ending game for all")
+        
+        // Check if game has ended status
+        if (gameState.gameStatus === 'ended' || gameState.gameStatus === 'cancelled') {
+          console.log("🎮 Game ended by host - redirecting players")
           onHostLeft()
-        } else if (hostPlayer.connected === false) {
-          console.log("❌ Host disconnected - ending game for all")
-          onHostLeft()
+          return
         }
+
+        // Check if host player exists and is connected
+        const hostPlayer = gameState.players?.find((p: any) => p.isHost)
+        
+        if (!hostPlayer) {
+          console.log("❌ No host player found in game - ending for all players")
+          onHostLeft()
+          return
+        }
+
+        // Check if host is disconnected
+        if (hostPlayer.connected === false) {
+          console.log("🔌 Host player disconnected - ending game for all players")
+          onHostLeft()
+          return
+        }
+
+        // Additional check: if host ID is not in active players
+        if (gameState.activePlayerIds && !gameState.activePlayerIds.includes(hostPlayer.id)) {
+          console.log("🚫 Host not in active players - game should end")
+          onHostLeft()
+          return
+        }
+
+        console.log("✅ Host is still connected and active")
       },
       (error) => {
         console.error("❌ Host disconnection listener error:", error)
@@ -381,6 +402,41 @@ export class GameSignaling {
       console.log("🔌 Unsubscribing from host disconnection listener")
       unsubscribe()
       this.listeners.delete(listenerId)
+    }
+  }
+
+  // NEW: Method to handle host leaving gracefully
+  async hostLeaveGame(roomId: string, gameId: string, hostPlayerId: string): Promise<void> {
+    if (!database) return
+
+    try {
+      console.log("👋 Host is leaving the game, cleaning up...")
+      
+      // First mark host as disconnected
+      await this.updatePlayerConnection(roomId, gameId, hostPlayerId, false)
+      
+      // Set game status to ended
+      const gameRef = ref(database, `multiplayer-games/${roomId}/${gameId}`)
+      await update(gameRef, {
+        gameStatus: 'ended',
+        endedBy: 'host',
+        endTime: Date.now(),
+        lastUpdated: Date.now()
+      })
+      
+      console.log("✅ Host leave handled gracefully")
+      
+      // Remove the game after a short delay to allow clients to detect the change
+      setTimeout(async () => {
+        try {
+          await this.endMultiplayerGame(roomId, gameId)
+        } catch (error) {
+          console.error("Error removing game after host left:", error)
+        }
+      }, 2000)
+      
+    } catch (error) {
+      console.error("❌ Error handling host leave:", error)
     }
   }
 
@@ -408,15 +464,12 @@ export class GameSignaling {
   // Clean game state for Firebase (remove functions and complex objects)
   private cleanGameState(gameState: GameState): any {
     try {
-      // Create a deep copy of the game state
       const cleanState = JSON.parse(JSON.stringify(gameState))
 
-      // Handle undefined winner property
       if (cleanState.winner === undefined) {
-        cleanState.winner = null // Replace undefined with null for Firebase
+        cleanState.winner = null
       }
 
-      // Ensure all nested objects are properly serializable
       return {
         ...cleanState,
         grid: cleanState.grid || [],
