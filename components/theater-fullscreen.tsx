@@ -783,9 +783,15 @@ export function TheaterFullscreen({
       {/* Video Area */}
       <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
         {/* Platform Players */}
-        <div className="relative w-full max-w-6xl mx-auto bg-black/50 backdrop-blur-sm rounded-2xl overflow-hidden shadow-2xl border border-white/10">
+        <div
+          className={`relative w-full bg-black/50 backdrop-blur-sm overflow-hidden ${
+            isFullscreen
+              ? "h-full w-full rounded-none border-none"
+              : "max-w-6xl mx-auto rounded-2xl shadow-2xl border border-white/10"
+          }`}
+        >
           {/* Video Player */}
-          <div className="relative aspect-video bg-black">
+          <div className={`relative bg-black ${isFullscreen ? "w-full h-full" : "aspect-video"}`}>
             {platform === "youtube" && <div id="youtube-player" className="w-full h-full" />}
 
             {platform === "vimeo" && (

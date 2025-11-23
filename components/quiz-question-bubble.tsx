@@ -33,21 +33,25 @@ export function QuizQuestionBubble({
   answers = [],
 }: QuizQuestionBubbleProps) {
   const [selectedAnswer, setSelectedAnswer] = useState<string>("")
+  const [hasSubmitted, setHasSubmitted] = useState(false)
 
   useEffect(() => {
     setSelectedAnswer("")
+    setHasSubmitted(false)
   }, [question.id])
 
   useEffect(() => {
-    if (timeRemaining === 0 && !userAnswer && !showResults) {
-      // Auto-submit empty answer when timer hits 0
+    if (timeRemaining === 0 && !hasSubmitted) {
+      setHasSubmitted(true)
       onAnswer("")
     }
-  }, [timeRemaining, userAnswer, showResults, onAnswer])
+  }, [timeRemaining, hasSubmitted, onAnswer])
 
   const handleAnswerClick = (answer: string) => {
-    if (userAnswer || showResults) return
+    if (hasSubmitted) return
+
     setSelectedAnswer(answer)
+    setHasSubmitted(true)
     onAnswer(answer)
   }
 
@@ -70,7 +74,7 @@ export function QuizQuestionBubble({
       } else {
         return "bg-slate-700/50 border-slate-600 text-gray-300"
       }
-    } else if (userAnswer === option) {
+    } else if (userAnswer === option || selectedAnswer === option) {
       return "bg-purple-500/20 border-purple-400 text-purple-300"
     } else {
       return "bg-slate-700/50 border-slate-600 text-white hover:bg-slate-600/50 hover:border-slate-500"
@@ -158,9 +162,9 @@ export function QuizQuestionBubble({
               <button
                 key={index}
                 onClick={() => handleAnswerClick(option)}
-                disabled={!!userAnswer || showResults}
+                disabled={hasSubmitted}
                 className={`w-full p-2 rounded-xl border-2 text-left transition-all duration-200 ${getAnswerStyle(option)} ${
-                  !userAnswer && !showResults ? "cursor-pointer" : "cursor-default"
+                  !hasSubmitted ? "cursor-pointer" : "cursor-default"
                 }`}
               >
                 <div className="flex items-center justify-between">
@@ -171,7 +175,7 @@ export function QuizQuestionBubble({
                           ? "border-green-400 bg-green-500"
                           : showResults && isUserAnswer && !isCorrect
                             ? "border-red-400 bg-red-500"
-                            : isUserAnswer
+                            : isUserAnswer || selectedAnswer === option
                               ? "border-purple-400 bg-purple-500"
                               : "border-gray-400"
                       }`}
@@ -246,17 +250,33 @@ export function QuizQuestionBubble({
 
         {showResults && (
           <div className="mt-2 p-2 bg-slate-800/50 rounded-lg">
-            <div className="text-center text-sm text-gray-300">
-              {correctAnswer && (
-                <p>
-                  <span className="text-green-400 font-medium">Correct Answer: </span>
-                  {correctAnswer}
-                </p>
+            <div className="text-center text-sm">
+              {userAnswer === correctAnswer ? (
+                <p className="text-green-400 font-medium">✓ Correct!</p>
+              ) : userAnswer ? (
+                <div>
+                  <p className="text-red-400 font-medium">✗ Wrong Answer</p>
+                  <p className="mt-1 text-gray-300">
+                    <span className="text-green-400">Correct: </span>
+                    {correctAnswer}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-gray-400">Time's up!</p>
               )}
-              <p className="mt-1 text-gray-400">Next question in 3 seconds...</p>
             </div>
           </div>
         )}
+
+        <div className="mt-3 pt-3 border-t border-slate-700">
+          <Button
+            variant="outline"
+            className="w-full bg-slate-800 border-slate-600 text-white hover:bg-slate-700 hover:border-slate-500"
+            onClick={onExit}
+          >
+            Cancel Quiz
+          </Button>
+        </div>
       </div>
     </div>
   )

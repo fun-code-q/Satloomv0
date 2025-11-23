@@ -18,15 +18,17 @@ import {
   MoreVertical,
   Phone,
   VideoIcon,
-  Film,
+  Copy,
+  Check,
+  Smile,
+  type File,
+  X,
   Gamepad2,
   Settings,
   Info,
-  X,
-  Camera,
+  Film,
   Users,
-  Smile,
-  Copy,
+  Camera,
 } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { AttachmentMenu } from "./attachment-menu"
@@ -56,6 +58,7 @@ import { QuizQuestionBubble } from "./quiz-question-bubble"
 import { QuizResultsBubble } from "./quiz-results-bubble"
 import { database } from "@/lib/firebase"
 import { onValue, ref, update } from "firebase/database"
+import { MoodModal, type MoodConfig } from "./mood-modal"
 
 interface ChatInterfaceProps {
   roomId: string
@@ -102,6 +105,16 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   // Check if we're on mobile
   const isMobile = useMediaQuery("(max-width: 768px)")
 
+  // Initialize systems first
+  const userPresence = UserPresenceSystem.getInstance()
+  const notificationSystem = NotificationSystem.getInstance()
+  const messageStorage = MessageStorage.getInstance()
+  const callSignaling = CallSignaling.getInstance()
+  const theaterSignaling = TheaterSignaling.getInstance()
+  const quizSystem = QuizSystem.getInstance()
+  const gameSignaling = GameSignaling.getInstance()
+  const themeContext = useTheme()
+
   const [message, setMessage] = useState("")
   const [messages, setMessages] = useState<Message[]>([])
   const [isMenuOpen, setIsMenuOpen] = useState(false)
@@ -110,12 +123,25 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   const [isTyping, setIsTyping] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
 
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  // State for notifications and invites
+  const [showGameInvite, setShowGameInvite] = useState<GameInvite | null>(null)
+  const [showTheaterInvite, setShowTheaterInvite] = useState<TheaterInvite | null>(null)
+  const [isCopied, setIsCopied] = useState(false) // Added state for copy feedback
+
+  // Mood State
+  const [showMoodSetup, setShowMoodSetup] = useState(false)
+  const [roomMood, setRoomMood] = useState<MoodConfig | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [currentMusicIndex, setCurrentMusicIndex] = useState(0)
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null) // Moved here for better organization
   const typingTimeoutRef = useRef<NodeJS.Timeout>()
   const quizTimerRef = useRef<NodeJS.Timeout>()
   const theaterSessionUnsubscribeRef = useRef<() => void>()
   const currentTheaterSessionRef = useRef<TheaterSession | null>(null)
+  const hasJoinedRef = useRef(false) // Track if user has joined room message sent
+  const exitedQuizSessionsRef = useRef<Set<string>>(new Set()) // Track quiz sessions user explicitly exited
 
   const [showAudioCall, setShowAudioCall] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -159,18 +185,25 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   const [quizTimeRemaining, setQuizTimeRemaining] = useState(0)
   const [userQuizAnswer, setUserQuizAnswer] = useState<string>("")
   const [showQuizResults, setShowQuizResults] = useState(false)
+  const currentUserId = useRef(userPresence.createUniqueUserId(userProfile.name)).current // Create unique user ID to prevent duplicates
+  const isRoomHost = isHost || currentQuizSession?.hostId === currentUserId // Determine if the current user is the host of the room or the quiz
 
-  const themeContext = useTheme()
-  const notificationSystem = NotificationSystem.getInstance()
-  const messageStorage = MessageStorage.getInstance()
-  const userPresence = UserPresenceSystem.getInstance()
-  const callSignaling = CallSignaling.getInstance()
-  const theaterSignaling = TheaterSignaling.getInstance()
-  const quizSystem = QuizSystem.getInstance()
-  const gameSignaling = GameSignaling.getInstance()
-
-  // Create unique user ID to prevent duplicates
-  const currentUserId = useRef(userPresence.createUniqueUserId(userProfile.name)).current
+  const sendSystemMessage = async (text: string) => {
+    try {
+      await messageStorage.sendMessage(roomId, {
+        text,
+        sender: "System",
+        timestamp: new Date(),
+        type: "system",
+        reactions: {
+          heart: [],
+          thumbsUp: [],
+        },
+      })
+    } catch (error) {
+      console.error("Failed to send system message:", error)
+    }
+  }
 
   // Auto-scroll to bottom
   const scrollToBottom = () => {
@@ -188,6 +221,11 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     if (!roomId || roomId.trim() === "") {
       console.error("ChatInterface: Cannot initialize with invalid roomId:", roomId)
       return
+    }
+
+    if (!hasJoinedRef.current) {
+      hasJoinedRef.current = true
+      sendSystemMessage("Joined the room.")
     }
 
     // Initialize systems
@@ -262,7 +300,7 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         }
       },
       (call: CallData) => {
-        if (call.participants.includes(currentUserId) || call.callerId === currentUserId) {
+        if (call.participants?.includes(currentUserId) || call.callerId === currentUserId) {
           setCurrentCall(call)
           if (call.status === "answered") {
             setIsInCall(true)
@@ -294,47 +332,75 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
               (session: any) => session.status === "active" || session.status === "waiting",
             )
 
-            if (activeSessions.length > 0 && !currentQuizSession) {
+            if (activeSessions.length > 0) {
               const activeSession = activeSessions[0] as QuizSession
 
-              // Auto-join the quiz if user is not already participating
-              if (!activeSession.participants.includes(currentUserId)) {
+              if (exitedQuizSessionsRef.current.has(activeSession.id)) {
+                return // User explicitly closed this quiz, don't rejoin
+              }
+
+              // Auto-join the quiz if user is not already participating and hasn't exited
+              if (!activeSession.participants?.includes(currentUserId)) {
                 quizSystem.joinQuizSession(roomId, activeSession.id, currentUserId)
               }
 
-              // Start listening to this quiz session
-              const sessionUnsubscribe = quizSystem.listenForQuizSession(roomId, activeSession.id, (session) => {
-                setCurrentQuizSession(session)
-
-                if (session.status === "active") {
-                  setQuizTimeRemaining(session.timePerQuestion)
-                  setUserQuizAnswer("")
-                  setShowQuizResults(false)
-
-                  if (quizTimerRef.current) {
-                    clearInterval(quizTimerRef.current)
+              if (activeSession.participants?.includes(currentUserId) || !currentQuizSession) {
+                // Start listening to this quiz session
+                const sessionUnsubscribe = quizSystem.listenForQuizSession(roomId, activeSession.id, (session) => {
+                  if (exitedQuizSessionsRef.current.has(session.id)) {
+                    return
                   }
 
-                  let timeLeft = session.timePerQuestion
-                  quizTimerRef.current = setInterval(() => {
-                    timeLeft--
-                    setQuizTimeRemaining(timeLeft)
+                  setCurrentQuizSession((prev) => {
+                    if (prev && prev.currentQuestionIndex !== session.currentQuestionIndex) {
+                      setQuizTimeRemaining(session.timePerQuestion)
+                      setUserQuizAnswer("")
+                      setShowQuizResults(false)
 
-                    if (timeLeft <= 0) {
-                      clearInterval(quizTimerRef.current!)
-                      if (!userQuizAnswer) {
-                        handleQuizAnswer("")
+                      // Clear old timer
+                      if (quizTimerRef.current) {
+                        clearInterval(quizTimerRef.current)
+                        quizTimerRef.current = null
                       }
                     }
-                  }, 1000)
-                }
-              })
+                    return session
+                  })
 
-              // Listen for quiz answers
-              quizSystem.listenForQuizAnswers(roomId, activeSession.id, (answers) => {
-                setQuizAnswers(answers)
-              })
+                  if (session.status === "active" && !quizTimerRef.current) {
+                    setQuizTimeRemaining(session.timePerQuestion)
+
+                    quizTimerRef.current = setInterval(() => {
+                      setQuizTimeRemaining((prev) => {
+                        const newTime = prev - 1
+                        if (newTime <= 0) {
+                          if (quizTimerRef.current) {
+                            clearInterval(quizTimerRef.current)
+                            quizTimerRef.current = null
+                          }
+                          return 0
+                        }
+                        return newTime
+                      })
+                    }, 1000)
+                  }
+
+                  if (session.status === "finished") {
+                    if (quizTimerRef.current) {
+                      clearInterval(quizTimerRef.current)
+                      quizTimerRef.current = null
+                    }
+                    setShowQuizResults(true)
+                  }
+                })
+
+                // Listen for quiz answers
+                quizSystem.listenForQuizAnswers(roomId, activeSession.id, (answers) => {
+                  setQuizAnswers(answers)
+                })
+              }
             }
+          } else {
+            exitedQuizSessionsRef.current.clear()
           }
         })
       : () => {}
@@ -351,6 +417,13 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
                 onLeave()
               }, 2000)
             }
+          }
+
+          // Listen for mood changes
+          if (roomData && roomData.mood) {
+            setRoomMood(roomData.mood)
+          } else {
+            setRoomMood(null)
           }
         })
       : () => {}
@@ -382,14 +455,157 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     showPlayground,
     showQuizSetup,
     currentQuizSession,
+    isHost, // Added isHost to dependency array
+    onLeave, // Added onLeave to dependency array
+    notificationSystem, // Added notificationSystem to dependency array
+    themeContext.notifications, // Added specific theme context properties
+    themeContext.notificationSound,
+    // Removed currentQuizSession?.currentQuestionIndex from dependencies as it was causing issues with exhaustive-deps linting.
+    // The logic within the effect for quiz advancement should handle this appropriately.
   ])
+
+  useEffect(() => {
+    // Only run this effect if we have an active quiz session and the current user is the host.
+    if (!currentQuizSession || currentQuizSession.status !== "active" || currentQuizSession.hostId !== currentUserId)
+      return
+
+    const currentQIndex = currentQuizSession.currentQuestionIndex
+    const currentQuestionId = currentQuizSession.questions[currentQIndex].id
+
+    // Filter answers for the current question.
+    const currentAnswers = quizAnswers.filter((a) => a.questionId === currentQuestionId)
+
+    // Determine the total number of participants (ensure it's at least 1 for the host).
+    const participantCount = currentQuizSession.participants?.length || 1
+
+    // Check if the time is up.
+    const isTimeUp = quizTimeRemaining <= 0
+
+    // Determine if all participants have answered.
+    const allAnswered = currentAnswers.length >= participantCount
+
+    // Check if there's a need to wait for potentially wrong answers.
+    const hasWrongAnswer = currentAnswers.some((a) => !a.isCorrect)
+    const shouldWait = !isTimeUp && hasWrongAnswer
+
+    // Function to advance to the next question.
+    const advanceToNextQuestion = () => {
+      quizSystem.nextQuestion(roomId, currentQuizSession.id)
+    }
+
+    // Logic to decide when to advance:
+    // 1. If time is up, advance immediately.
+    // 2. If all have answered and no waiting is needed (i.e., all correct or not waiting), advance.
+    // 3. If waiting is required (some wrong answers, not time up), wait for the specified duration.
+    if (isTimeUp || (allAnswered && !shouldWait)) {
+      // Add a small buffer for visual feedback if it was an instant advance.
+      const timeoutDuration = isTimeUp ? 0 : 1000
+      const timeout = setTimeout(advanceToNextQuestion, timeoutDuration)
+      return () => clearTimeout(timeout)
+    } else if (shouldWait) {
+      // Wait for 3 seconds if there were wrong answers and time is not up.
+      const timeout = setTimeout(advanceToNextQuestion, 3000)
+      return () => clearTimeout(timeout)
+    }
+  }, [
+    quizAnswers,
+    quizTimeRemaining,
+    currentQuizSession,
+    roomId,
+    quizSystem,
+    currentUserId,
+    // Added missing dependencies to satisfy exhaustive-deps
+    currentQuizSession?.hostId,
+    currentQuizSession?.participants,
+    currentQuizSession?.id,
+    currentQuizSession?.questions,
+    currentQuizSession?.timePerQuestion,
+    currentQuizSession?.currentQuestionIndex,
+    currentQuizSession?.status,
+  ])
+
+  useEffect(() => {
+    if (!roomMood?.musicUrls) {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.src = ""
+      }
+      return
+    }
+
+    const musicUrls = roomMood.musicUrls.filter((url) => url && url.trim() !== "")
+    if (musicUrls.length === 0) {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.src = ""
+      }
+      return
+    }
+
+    const currentUrl = musicUrls[currentMusicIndex]
+    if (!currentUrl) return
+
+    if (audioRef.current) {
+      const audio = audioRef.current
+
+      if (audio.src === currentUrl && !audio.paused) return
+
+      audio.src = currentUrl
+      audio.loop = roomMood.loop || false
+
+      const playPromise = audio.play()
+      if (playPromise !== undefined) {
+        playPromise.catch((error) => {
+          console.log("Audio playback failed:", error)
+        })
+      }
+
+      const handleEnded = () => {
+        if (!roomMood.loop && musicUrls.length > 1) {
+          setCurrentMusicIndex((prev) => (prev + 1) % musicUrls.length)
+        }
+      }
+
+      audio.addEventListener("ended", handleEnded)
+      return () => {
+        audio.removeEventListener("ended", handleEnded)
+      }
+    }
+  }, [roomMood, currentMusicIndex])
+
+  const handleSaveMood = async (mood: MoodConfig | null) => {
+    try {
+      if (database) {
+        await update(ref(database, `rooms/${roomId}`), { mood })
+
+        if (mood) {
+          await sendSystemMessage("Updated the room mood.")
+        } else {
+          await sendSystemMessage("Reset the room mood to default.")
+        }
+      }
+    } catch (error) {
+      console.error("Error saving mood:", error)
+      notificationSystem.error("Failed to save mood settings")
+    }
+  }
 
   const handleSendMessage = async () => {
     if (message.trim()) {
       try {
         // Check for quiz trigger
         if (message.trim() === "?quiz?") {
-          handleStartQuiz()
+          setShowQuizSetup(true)
+          setMessage("")
+          return
+        }
+
+        if (message.trim() === "?mood?") {
+          if (isHost) {
+            setShowMoodSetup(true)
+          } else {
+            notificationSystem.error("Only the host can change the room mood.")
+          }
           setMessage("")
           return
         }
@@ -495,6 +711,8 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         .writeText(roomLink)
         .then(() => {
           notificationSystem.success(`Room link copied! Room ID: ${cleanRoomId}`)
+          setIsCopied(true)
+          setTimeout(() => setIsCopied(false), 2000)
         })
         .catch(() => {
           notificationSystem.error("Failed to copy room link")
@@ -514,6 +732,12 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
   const handleConfirmLeave = async () => {
     setShowLeaveConfirmation(false)
+
+    await sendSystemMessage("Left the room.")
+
+    if (currentTheaterSessionRef.current) {
+      await theaterSignaling.leaveSession(roomId, currentTheaterSessionRef.current.id, currentUserId)
+    }
 
     if (isHost) {
       try {
@@ -601,10 +825,23 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
 
   // Call handling functions
   const handleStartAudioCall = async () => {
+    await sendSystemMessage("Started an audio call.")
+
     try {
       console.log("Starting audio call...")
       const callId = await callSignaling.startCall(roomId, userProfile.name, currentUserId, "audio")
       console.log("Audio call started with ID:", callId)
+
+      const newCall: CallData = {
+        id: callId,
+        roomId: roomId,
+        callerId: currentUserId,
+        caller: userProfile.name,
+        type: "audio",
+        timestamp: new Date(),
+        status: "ringing",
+        participants: [currentUserId],
+      }
 
       // Start WebRTC connection for caller
       const otherUsers = onlineUsers.filter((user) => user.id !== currentUserId)
@@ -622,10 +859,23 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   const handleStartVideoCall = async () => {
+    await sendSystemMessage("Started a video call.")
+
     try {
       console.log("Starting video call...")
       const callId = await callSignaling.startCall(roomId, userProfile.name, currentUserId, "video")
       console.log("Video call started with ID:", callId)
+
+      const newCall: CallData = {
+        id: callId,
+        roomId: roomId,
+        callerId: currentUserId,
+        caller: userProfile.name,
+        type: "video",
+        timestamp: new Date(),
+        status: "ringing",
+        participants: [currentUserId],
+      }
 
       // Start WebRTC connection for caller
       const otherUsers = onlineUsers.filter((user) => user.id !== currentUserId)
@@ -650,49 +900,63 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     setShowPlaygroundSetup(true)
   }
 
-  const handleAnswerCall = () => {
+  const handleAnswerCall = async () => {
     if (incomingCall) {
+      await sendSystemMessage("Joined the audio call.")
+
+      await callSignaling.answerCall(roomId, incomingCall.id, currentUserId)
       setCurrentCall(incomingCall)
-      setIncomingCall(null)
-      setShowAudioCall(true)
       setIsInCall(true)
-      userPresence.updateActivity(roomId, currentUserId, "call")
+      setShowAudioCall(true)
+      setIncomingCall(null)
     }
   }
 
   const handleDeclineCall = () => {
     if (incomingCall) {
-      callSignaling.endCall(roomId, incomingCall.id)
+      // notificationSystem.info("Call declined") // Optional: maybe generic logs?
       setIncomingCall(null)
     }
   }
 
   const handleEndCall = () => {
+    if (currentCall) {
+      sendSystemMessage("Left the audio call.")
+
+      callSignaling.endCall(roomId, currentCall.id, currentUserId)
+    }
     setShowAudioCall(false)
-    setCurrentCall(null)
     setIsInCall(false)
-    userPresence.updateActivity(roomId, currentUserId, "chat")
+    setCurrentCall(null)
   }
 
-  const handleAnswerVideoCall = () => {
-    if (incomingCall && incomingCall.type === "video") {
+  const handleAnswerVideoCall = async () => {
+    if (incomingCall) {
+      await sendSystemMessage("Joined the video call.")
+
+      await callSignaling.answerCall(roomId, incomingCall.id, currentUserId)
       setCurrentCall(incomingCall)
-      setIncomingCall(null)
-      setShowVideoCall(true)
       setIsInCall(true)
-      userPresence.updateActivity(roomId, currentUserId, "video-call")
+      setShowVideoCall(true)
+      setIncomingCall(null)
     }
   }
 
   const handleEndVideoCall = () => {
+    if (currentCall) {
+      sendSystemMessage("Left the video call.")
+
+      callSignaling.endCall(roomId, currentCall.id, currentUserId)
+    }
     setShowVideoCall(false)
-    setCurrentCall(null)
     setIsInCall(false)
-    userPresence.updateActivity(roomId, currentUserId, "chat")
+    setCurrentCall(null)
   }
 
-  const handleCreateTheaterSession = async (videoUrl: string, videoType: "direct" | "youtube" | "vimeo") => {
+  const handleCreateTheaterSession = async (videoUrl: string, videoType: "youtube" | "vimeo" | "direct") => {
     try {
+      await sendSystemMessage("Started a movie theater session.")
+
       const sessionId = await theaterSignaling.createSession(
         roomId,
         userProfile.name,
@@ -729,39 +993,41 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   const handleAcceptTheaterInvite = async () => {
-    if (!theaterInvite) return
+    if (theaterInvite) {
+      try {
+        await sendSystemMessage("Joined the theater.")
 
-    try {
-      const success = await theaterSignaling.joinSession(
-        roomId,
-        theaterInvite.sessionId,
-        currentUserId,
-        userProfile.name,
-      )
+        const success = await theaterSignaling.joinSession(
+          roomId,
+          theaterInvite.sessionId,
+          currentUserId,
+          userProfile.name,
+        )
 
-      if (!success) {
-        notificationSystem.error("Failed to join theater session")
+        if (!success) {
+          notificationSystem.error("Failed to join theater session")
+          setTheaterInvite(null)
+          return
+        }
+
+        if (theaterSessionUnsubscribeRef.current) theaterSessionUnsubscribeRef.current()
+        theaterSessionUnsubscribeRef.current = theaterSignaling.listenForSession(
+          roomId,
+          theaterInvite.sessionId,
+          (session) => {
+            setCurrentTheaterSession(session)
+            setIsTheaterHost(session.hostId === currentUserId)
+            setShowTheaterFullscreen(true)
+            userPresence.updateActivity(roomId, currentUserId, "theater")
+          },
+        )
+
+        setIsTheaterHost(false)
         setTheaterInvite(null)
-        return
+      } catch (error) {
+        console.error("Error joining theater session:", error)
+        notificationSystem.error("Failed to join theater session")
       }
-
-      if (theaterSessionUnsubscribeRef.current) theaterSessionUnsubscribeRef.current()
-      theaterSessionUnsubscribeRef.current = theaterSignaling.listenForSession(
-        roomId,
-        theaterInvite.sessionId,
-        (session) => {
-          setCurrentTheaterSession(session)
-          setIsTheaterHost(session.hostId === currentUserId)
-          setShowTheaterFullscreen(true)
-          userPresence.updateActivity(roomId, currentUserId, "theater")
-        },
-      )
-
-      setIsTheaterHost(false)
-      setTheaterInvite(null)
-    } catch (error) {
-      console.error("Error joining theater session:", error)
-      notificationSystem.error("Failed to join theater session")
     }
   }
 
@@ -770,12 +1036,16 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   const handleExitTheater = async () => {
+    // Stop listening to updates
     if (theaterSessionUnsubscribeRef.current) {
       theaterSessionUnsubscribeRef.current()
       theaterSessionUnsubscribeRef.current = undefined
     }
 
     if (currentTheaterSession) {
+      await sendSystemMessage("Left the theater.")
+
+      // Use leaveSession for everyone, including host (migration will handle it)
       await theaterSignaling.leaveSession(roomId, currentTheaterSession.id, currentUserId)
     }
 
@@ -786,15 +1056,16 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   const handleStartPlaygroundGame = async (config: GameConfig) => {
-    try {
-      console.log("Starting playground game with config:", config)
-      console.log("Current user profile:", userProfile)
+    setShowPlaygroundSetup(false)
+    setPlaygroundConfig(config)
+    setIsGameHost(true)
 
+    await sendSystemMessage(`Started a game of ${config.gameType}.`)
+
+    try {
+      // Create game invite logic
       if (config.mode === "single") {
         // Single player mode - start immediately with AI
-        setPlaygroundConfig(config)
-        setIsGameHost(true)
-        setShowPlaygroundSetup(false)
         setShowPlayground(true)
         userPresence.updateActivity(roomId, currentUserId, "game")
         notificationSystem.success("Game started against AI!")
@@ -821,9 +1092,6 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             },
           })
 
-          setPlaygroundConfig(config)
-          setIsGameHost(true)
-          setShowPlaygroundSetup(false)
           setShowPlayground(true)
           userPresence.updateActivity(roomId, currentUserId, "game")
           notificationSystem.success(`Game started against ${aiCount} AI!`)
@@ -886,7 +1154,6 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
           // Start the game for the host with the multiplayer config
           setPlaygroundConfig(multiplayerConfig)
           setIsGameHost(true)
-          setShowPlaygroundSetup(false)
           setShowPlayground(true)
           userPresence.updateActivity(roomId, currentUserId, "game")
 
@@ -899,74 +1166,38 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
     }
   }
 
-  const handleExitPlayground = () => {
+  const handleExitPlayground = async () => {
+    await sendSystemMessage("Left the game.")
+
     setShowPlayground(false)
     setPlaygroundConfig(null)
     setIsGameHost(false)
+    setActiveGameInvite(null)
+
+    // Reset declined invites so user can be invited again
+    // Not strictly necessary to reset here, but good for a clean slate
+    setDeclinedInvites(new Set())
+
     userPresence.updateActivity(roomId, currentUserId, "chat")
   }
 
   const handleAcceptGameInvite = async () => {
-    if (!activeGameInvite) return
+    if (activeGameInvite) {
+      await sendSystemMessage("Joined the game.")
 
-    try {
-      console.log("Accepting game invite:", activeGameInvite.id)
-      console.log("Current user profile for joining:", userProfile)
-
-      setDeclinedInvites((prev) => new Set(prev).add(activeGameInvite.id))
-
-      // Find the first available placeholder slot and update it with current user info
-      let foundSlot = false
-      const joiningConfig = {
-        ...activeGameInvite.gameConfig,
-        players: activeGameInvite.gameConfig.players.map((player, index) => {
-          // Find the first placeholder slot and assign it to the current user
-          if (player.isPlaceholder && !player.isAI && player.id.startsWith("placeholder_") && !foundSlot) {
-            foundSlot = true
-            console.log(`Assigning slot ${index} to user:`, { id: currentUserId, name: userProfile.name })
-            return {
-              ...player,
-              id: currentUserId,
-              name: userProfile.name, // Use actual user profile name
-              isPlaceholder: false,
-            }
-          }
-          return player
-        }),
-      }
-
-      console.log("Created joining config:", joiningConfig)
-
-      if (!foundSlot) {
-        notificationSystem.error("No available slots in the game")
-        setActiveGameInvite(null)
-        return
-      }
-
-      // Join the game with the updated config
-      setPlaygroundConfig(joiningConfig)
-      setIsGameHost(false)
+      setPlaygroundConfig(activeGameInvite.gameConfig)
       setShowPlayground(true)
-      setActiveGameInvite(null) // Explicitly clear active invite
+      setIsGameHost(false)
+
+      // Notify host
+      // No explicit message needed here, the game component will handle host communication
+
+      // Remove the invite from the list and clear active invite
+      setGameInvites((prev) => prev.filter((inv) => inv.id !== activeGameInvite.id))
+      setActiveGameInvite(null)
       userPresence.updateActivity(roomId, currentUserId, "game")
 
-      // Send a message to the chat that user joined
-      await messageStorage.sendMessage(roomId, {
-        text: `🎮 ${userProfile.name} joined the multiplayer game!`,
-        sender: "System",
-        timestamp: new Date(),
-        type: "system",
-        reactions: {
-          heart: [],
-          thumbsUp: [],
-        },
-      })
-
       notificationSystem.success(`Joined the game as ${userProfile.name}!`)
-    } catch (error) {
-      console.error("Error joining game:", error)
-      notificationSystem.error("Failed to join game")
-      setActiveGameInvite(null)
     }
   }
 
@@ -1014,75 +1245,115 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   ]
 
   const handleStartQuiz = async () => {
-    try {
-      console.log("Starting random quiz")
+    setShowQuizSetup(false)
 
-      // Create quiz session with no topic (random)
-      const sessionId = await quizSystem.createQuizSession(roomId, currentUserId, userProfile.name)
+    await sendSystemMessage("Started a quiz.")
 
-      // Send quiz notification to chat
-      await messageStorage.sendQuizNotification(roomId, userProfile.name)
+    // Create quiz session
+    const sessionId = await quizSystem.createQuizSession(roomId, currentUserId, userProfile.name)
 
-      // Join the quiz session for the host
-      await quizSystem.joinQuizSession(roomId, sessionId, currentUserId)
-
-      // Start listening for the quiz session
-      const unsubscribe = quizSystem.listenForQuizSession(roomId, sessionId, (session) => {
-        setCurrentQuizSession(session)
-
-        if (session.status === "active") {
-          // Quiz is now active, start the timer for current question
+    // Start listening
+    const unsubscribe = quizSystem.listenForQuizSession(roomId, sessionId, (session) => {
+      setCurrentQuizSession((prev) => {
+        if (prev && prev.currentQuestionIndex !== session.currentQuestionIndex) {
           setQuizTimeRemaining(session.timePerQuestion)
           setUserQuizAnswer("")
           setShowQuizResults(false)
 
-          // Start countdown timer
+          // Clear old timer
           if (quizTimerRef.current) {
             clearInterval(quizTimerRef.current)
+            quizTimerRef.current = null
           }
-
-          let timeLeft = session.timePerQuestion
-          quizTimerRef.current = setInterval(() => {
-            timeLeft--
-            setQuizTimeRemaining(timeLeft)
-
-            if (timeLeft <= 0) {
-              clearInterval(quizTimerRef.current!)
-              // Auto-submit empty answer if time runs out
-              if (!userQuizAnswer) {
-                handleQuizAnswer("")
-              }
-            }
-          }, 1000)
         }
+        return session
       })
 
-      // Listen for quiz answers
-      quizSystem.listenForQuizAnswers(roomId, sessionId, (answers) => {
-        setQuizAnswers(answers)
-      })
+      if (session.status === "active" && !quizTimerRef.current) {
+        setQuizTimeRemaining(session.timePerQuestion)
 
-      // Start the quiz immediately
-      await quizSystem.startQuiz(roomId, sessionId)
+        quizTimerRef.current = setInterval(() => {
+          setQuizTimeRemaining((prev) => {
+            const newTime = prev - 1
+            if (newTime <= 0) {
+              if (quizTimerRef.current) {
+                clearInterval(quizTimerRef.current)
+                quizTimerRef.current = null
+              }
+              return 0
+            }
+            return newTime
+          })
+        }, 1000)
+      }
 
-      notificationSystem.success("Random quiz started!")
-    } catch (error) {
-      console.error("Error starting quiz:", error)
-      notificationSystem.error("Failed to start quiz")
-    }
+      if (session.status === "finished") {
+        if (quizTimerRef.current) {
+          clearInterval(quizTimerRef.current)
+          quizTimerRef.current = null
+        }
+        setShowQuizResults(true)
+      }
+    })
+
+    // Listen for quiz answers
+    quizSystem.listenForQuizAnswers(roomId, sessionId, (answers) => {
+      setQuizAnswers(answers)
+    })
+
+    // Start the quiz
+    await quizSystem.startQuiz(roomId, sessionId)
+
+    notificationSystem.success("Quiz started!")
   }
 
-  const handleQuizAnswer = async (answer: string) => {
-    if (!currentQuizSession || userQuizAnswer) return
+  useEffect(() => {
+    if (!currentQuizSession || currentQuizSession.status !== "active" || !userQuizAnswer) return
 
-    try {
+    const currentQuestion = currentQuizSession.questions[currentQuizSession.currentQuestionIndex]
+    const isCorrect = userQuizAnswer === currentQuestion.correctAnswer
+
+    if (isCorrect) {
+      const timer = setTimeout(async () => {
+        if (currentQuizSession.hostId === currentUserId) {
+          await quizSystem.nextQuestion(roomId, currentQuizSession.id)
+        }
+      }, 1000)
+
+      return () => clearTimeout(timer)
+    } else if (userQuizAnswer) {
+      setShowQuizResults(true)
+      const timer = setTimeout(async () => {
+        if (currentQuizSession.hostId === currentUserId) {
+          await quizSystem.nextQuestion(roomId, currentQuizSession.id)
+        }
+      }, 3000)
+
+      return () => clearTimeout(timer)
+    }
+  }, [userQuizAnswer, currentQuizSession, roomId, currentUserId])
+
+  useEffect(() => {
+    if (quizTimeRemaining <= 0 && currentQuizSession?.status === "active" && !userQuizAnswer) {
+      handleQuizAnswer("")
+
+      if (currentQuizSession.hostId === currentUserId) {
+        setTimeout(async () => {
+          await quizSystem.nextQuestion(roomId, currentQuizSession.id)
+        }, 2000)
+      }
+    }
+  }, [quizTimeRemaining, currentQuizSession, userQuizAnswer, roomId, currentUserId])
+
+  const handleQuizAnswer = (answer: string) => {
+    if (currentQuizSession && currentQuizSession.status === "active") {
+      setUserQuizAnswer(answer)
+      // Removed setShowQuizResults(true) here as it's handled by the effect based on answer correctness or time expiration.
+
       const currentQuestion = currentQuizSession.questions[currentQuizSession.currentQuestionIndex]
       const timeToAnswer = currentQuizSession.timePerQuestion - quizTimeRemaining
 
-      setUserQuizAnswer(answer)
-
-      // Submit answer to Firebase
-      await quizSystem.submitAnswer(
+      quizSystem.submitAnswer(
         roomId,
         currentQuizSession.id,
         currentUserId,
@@ -1092,80 +1363,29 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         currentQuestion.correctAnswer,
         timeToAnswer,
       )
-
-      // Clear timer
-      if (quizTimerRef.current) {
-        clearInterval(quizTimerRef.current)
-      }
-
-      // Show results after a short delay
-      setTimeout(() => {
-        setShowQuizResults(true)
-
-        // Move to next question or end quiz after showing results
-        setTimeout(async () => {
-          if (currentQuizSession.currentQuestionIndex + 1 >= currentQuizSession.totalQuestions) {
-            // Quiz finished
-            await quizSystem.endQuiz(roomId, currentQuizSession.id)
-            const results = await quizSystem.calculateResults(roomId, currentQuizSession.id)
-            setQuizResults(results)
-
-            // Send results to chat
-            await messageStorage.sendQuizResults(roomId, results, currentQuizSession.totalQuestions)
-
-            // Clean up after showing final results
-            setTimeout(() => {
-              setCurrentQuizSession(null)
-              setQuizAnswers([])
-              setQuizResults([])
-              setUserQuizAnswer("")
-              setShowQuizResults(false)
-            }, 5000)
-          } else {
-            // Next question - only host advances the quiz
-            if (currentQuizSession.hostId === currentUserId) {
-              await quizSystem.nextQuestion(roomId, currentQuizSession.id, currentQuizSession.currentQuestionIndex)
-            }
-            // Clear user answer and results for next question
-            setUserQuizAnswer("")
-            setShowQuizResults(false)
-            // Clear quiz answers for the new question to reset participant status
-            setQuizAnswers([])
-          }
-        }, 3000)
-      }, 1000)
-    } catch (error) {
-      console.error("Error submitting quiz answer:", error)
-      notificationSystem.error("Failed to submit answer")
     }
   }
 
   const handleQuizExit = async () => {
-    if (!currentQuizSession) return
+    if (currentQuizSession) {
+      exitedQuizSessionsRef.current.add(currentQuizSession.id)
 
-    try {
-      // Clear timer
-      if (quizTimerRef.current) {
-        clearInterval(quizTimerRef.current)
-      }
-
-      // End quiz if host
-      if (currentQuizSession.hostId === currentUserId) {
-        await quizSystem.endQuiz(roomId, currentQuizSession.id)
-      }
-
-      // Clean up local state
       setCurrentQuizSession(null)
       setQuizAnswers([])
-      setQuizResults([])
       setUserQuizAnswer("")
       setShowQuizResults(false)
-      setQuizTimeRemaining(0)
+      if (quizTimerRef.current) {
+        clearInterval(quizTimerRef.current)
+        quizTimerRef.current = null
+      }
 
-      notificationSystem.success("Quiz exited")
-    } catch (error) {
-      console.error("Error exiting quiz:", error)
-      notificationSystem.error("Failed to exit quiz")
+      // Perform background cleanup operations
+      try {
+        await sendSystemMessage("Left the quiz.")
+        await quizSystem.removeParticipant(roomId, currentQuizSession.id, currentUserId)
+      } catch (error) {
+        console.error("Error exiting quiz:", error)
+      }
     }
   }
 
@@ -1197,21 +1417,21 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
   }
 
   return (
-    <div className="h-screen flex flex-col relative overflow-hidden">
-      <SpaceBackground />
+    <div className="flex h-screen flex-col overflow-hidden relative">
+      <SpaceBackground backgroundImage={roomMood?.backgroundImage} />
 
       {/* Header - Fixed and responsive */}
-      <div className="flex items-center justify-between p-2 md:p-4 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700 min-h-[60px]">
-        <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
+      <div className="px-4 py-3 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700 flex items-center justify-between shrink-0 z-10">
+        <div className="flex items-center gap-3">
           <AnimatedLogo />
-          <div className="flex items-center gap-1 md:gap-2 text-xs md:text-sm">
+          <div className="flex items-center gap-2 text-xs md:text-sm">
             <Users className="w-3 h-3 md:w-4 md:h-4 text-gray-400" />
             <span className="text-gray-400 whitespace-nowrap">{onlineUsers.length} online</span>
           </div>
           <div className="text-xs text-gray-500 truncate">Room: {roomId}</div>
         </div>
 
-        <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <Button
             variant="ghost"
             size={isMobile ? "sm" : "icon"}
@@ -1219,7 +1439,11 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
             onClick={handleCopyRoomLink}
             title={`Copy Room Link (${roomId})`}
           >
-            <Copy className="w-3 h-3 md:w-4 md:h-4" />
+            {isCopied ? (
+              <Check className="w-3 h-3 md:w-4 md:h-4 text-green-500" />
+            ) : (
+              <Copy className="w-3 h-3 md:w-4 md:h-4" />
+            )}
           </Button>
 
           <Button
@@ -1495,6 +1719,13 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
         onCreateSession={handleCreateTheaterSession}
       />
 
+      <MoodModal
+        isOpen={showMoodSetup}
+        onClose={() => setShowMoodSetup(false)}
+        currentMood={roomMood}
+        onSave={handleSaveMood}
+      />
+
       {/* Full-screen overlays */}
       {showPlayground && playgroundConfig && (
         <div className="fixed inset-0 z-50 bg-slate-900">
@@ -1608,6 +1839,8 @@ export function ChatInterface({ roomId, userProfile, onLeave, isHost = false }: 
           <QuizResultsBubble results={quizResults} totalQuestions={currentQuizSession?.totalQuestions || 10} />
         </div>
       )}
+
+      <audio ref={audioRef} className="hidden" />
     </div>
   )
 }

@@ -2,7 +2,11 @@
 
 import { useEffect, useRef } from "react"
 
-export function SpaceBackground() {
+interface SpaceBackgroundProps {
+  backgroundImage?: string | null
+}
+
+export function SpaceBackground({ backgroundImage }: SpaceBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -36,6 +40,7 @@ export function SpaceBackground() {
     }
 
     // Animation loop
+    let animationId: number
     const animate = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
@@ -57,25 +62,42 @@ export function SpaceBackground() {
         }
       })
 
-      requestAnimationFrame(animate)
+      animationId = requestAnimationFrame(animate)
     }
 
     animate()
 
     return () => {
       window.removeEventListener("resize", resizeCanvas)
+      cancelAnimationFrame(animationId)
     }
-  }, [])
+  }, [backgroundImage]) // Re-run when backgroundImage changes
+
+  const hasValidBackground = backgroundImage && backgroundImage.trim() !== ""
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="fixed inset-0 -z-10 w-full h-full"
-      style={{
-        background: "linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #1e3a8a 100%)",
-        maxWidth: "100vw",
-        maxHeight: "100vh",
-      }}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        className={`fixed inset-0 -z-10 w-full h-full transition-opacity duration-1000 ${
+          hasValidBackground ? "opacity-0" : "opacity-100"
+        }`}
+        style={{
+          background: "linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #1e3a8a 100%)",
+          maxWidth: "100vw",
+          maxHeight: "100vh",
+        }}
+      />
+      {/* Custom Background Layer */}
+      <div
+        className={`fixed inset-0 -z-10 w-full h-full bg-cover bg-center bg-no-repeat transition-opacity duration-1000 ${
+          hasValidBackground ? "opacity-100" : "opacity-0"
+        }`}
+        style={{
+          backgroundImage: hasValidBackground ? `url(${backgroundImage})` : "none",
+          backgroundColor: "#0f172a", // Fallback
+        }}
+      />
+    </>
   )
 }

@@ -75,7 +75,7 @@ export class QuizSystem {
       questions,
       currentQuestionIndex: 0,
       status: "waiting",
-      timePerQuestion: 20, // 20 seconds per question
+      timePerQuestion: 10,
       totalQuestions: 10,
       createdAt: Date.now(),
       participants: [hostId],
@@ -554,18 +554,6 @@ export class QuizSystem {
           category: "Music",
         },
         {
-          question: "Which genre of music did Elvis Presley help popularize?",
-          options: ["Jazz", "Blues", "Rock and Roll", "Country"],
-          correctAnswer: "Rock and Roll",
-          category: "Music",
-        },
-        {
-          question: "What is the highest female singing voice?",
-          options: ["Alto", "Mezzo-soprano", "Soprano", "Contralto"],
-          correctAnswer: "Soprano",
-          category: "Music",
-        },
-        {
           question: "Which instrument is Yo-Yo Ma famous for playing?",
           options: ["Violin", "Piano", "Cello", "Flute"],
           correctAnswer: "Cello",
@@ -801,6 +789,22 @@ export class QuizSystem {
     }
   }
 
+  // Remove participant from quiz session
+  async removeParticipant(roomId: string, sessionId: string, playerId: string): Promise<void> {
+    if (!database) return
+
+    const sessionRef = ref(database, `rooms/${roomId}/quiz/${sessionId}/participants`)
+    const participantsSnapshot = await new Promise<any>((resolve) => {
+      onValue(sessionRef, resolve, { onlyOnce: true })
+    })
+
+    const currentParticipants = participantsSnapshot.val() || []
+    if (currentParticipants.includes(playerId)) {
+      const updatedParticipants = currentParticipants.filter((id: string) => id !== playerId)
+      await set(sessionRef, updatedParticipants)
+    }
+  }
+
   // Submit answer
   async submitAnswer(
     roomId: string,
@@ -837,24 +841,33 @@ export class QuizSystem {
   }
 
   // Next question
-  async nextQuestion(roomId: string, sessionId: string, currentIndex: number): Promise<void> {
+  async nextQuestion(roomId: string, sessionId: string): Promise<void> {
     if (!database) return
 
-    const nextIndex = currentIndex + 1
-    const indexRef = ref(database, `rooms/${roomId}/quiz/${sessionId}/currentQuestionIndex`)
-    await set(indexRef, nextIndex)
+    const sessionRef = ref(database, `rooms/${roomId}/quiz/${sessionId}`)
 
-    // Reset timer for next question by updating a timestamp
-    const timerRef = ref(database, `rooms/${roomId}/quiz/${sessionId}/questionStartTime`)
-    await set(timerRef, Date.now())
+    // Get current session to check index
+    const snapshot = await new Promise<any>((resolve) => {
+      onValue(sessionRef, resolve, { onlyOnce: true })
+    })
+    const session = snapshot.val() as QuizSession
+
+    if (!session) return
+
+    const nextIndex = session.currentQuestionIndex + 1
+
+    if (nextIndex >= session.questions.length) {
+      await this.endQuiz(roomId, sessionId)
+    } else {
+      await set(ref(database, `rooms/${roomId}/quiz/${sessionId}/currentQuestionIndex`), nextIndex)
+      await set(ref(database, `rooms/${roomId}/quiz/${sessionId}/questionStartTime`), Date.now())
+    }
   }
 
   // End quiz
   async endQuiz(roomId: string, sessionId: string): Promise<void> {
     if (!database) return
-
-    const statusRef = ref(database, `rooms/${roomId}/quiz/${sessionId}/status`)
-    await set(statusRef, "finished")
+    await set(ref(database, `rooms/${roomId}/quiz/${sessionId}/status`), "finished")
   }
 
   // Calculate results
