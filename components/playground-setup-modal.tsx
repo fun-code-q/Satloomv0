@@ -2,30 +2,9 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogHeader } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Gamepad2, Users, Bot, Settings, Palette } from "lucide-react"
-
-export interface GameConfig {
-  gameType: "dots-and-boxes"
-  mode: "single" | "multi"
-  gridSize: number
-  difficulty: "easy" | "medium" | "hard"
-  voiceChatEnabled: boolean
-  sharedGameId?: string
-  players: Array<{
-    id: string
-    name: string
-    color: string
-    isAI?: boolean
-  }>
-}
+import { Gamepad2, Users, User, Bot, Mic, MicOff } from "lucide-react"
 
 interface PlaygroundSetupModalProps {
   isOpen: boolean
@@ -33,285 +12,326 @@ interface PlaygroundSetupModalProps {
   onStartGame: (config: GameConfig) => void
 }
 
-const PLAYER_COLORS = [
-  "#3b82f6", // blue
-  "#ef4444", // red
-  "#10b981", // emerald
-  "#f59e0b", // amber
-  "#8b5cf6", // purple
-  "#06b6d4", // cyan
-  "#84cc16", // lime
-  "#f97316", // orange
-]
+export interface GameConfig {
+  gameType: "single" | "double" | "multi"
+  players: Array<{
+    id: string
+    name: string
+    isComputer: boolean
+    isHost: boolean
+    color: string
+  }>
+  gridSize: number
+  difficulty: "easy" | "medium" | "hard"
+  voiceChatEnabled: boolean
+}
+
+const playerColors = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6", "#06b6d4"]
 
 export function PlaygroundSetupModal({ isOpen, onClose, onStartGame }: PlaygroundSetupModalProps) {
-  const [gameType] = useState<"dots-and-boxes">("dots-and-boxes")
-  const [mode, setMode] = useState<"single" | "multi">("single")
-  const [gridSize, setGridSize] = useState(4)
-  const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium")
+  const [gameType, setGameType] = useState<"single" | "double" | "multi">("single")
+  const [gridSize, setGridSize] = useState(5)
   const [voiceChatEnabled, setVoiceChatEnabled] = useState(false)
-  const [players, setPlayers] = useState([{ id: "player1", name: "You", color: PLAYER_COLORS[0], isAI: false }])
+  const [playerNames, setPlayerNames] = useState<string[]>(["Player 1", "Computer"])
+  const [computerPlayers, setComputerPlayers] = useState<boolean[]>([false, true])
+  const [nameErrors, setNameErrors] = useState<string[]>([])
 
-  const handleModeChange = (newMode: "single" | "multi") => {
-    setMode(newMode)
+  const handleGameTypeChange = (type: "single" | "double" | "multi") => {
+    setGameType(type)
 
-    if (newMode === "single") {
-      setPlayers([{ id: "player1", name: "You", color: PLAYER_COLORS[0], isAI: false }])
-    } else {
-      setPlayers([
-        { id: "player1", name: "You", color: PLAYER_COLORS[0], isAI: false },
-        { id: "player2", name: "Player 2", color: PLAYER_COLORS[1], isAI: false },
-        { id: "player3", name: "Player 3", color: PLAYER_COLORS[2], isAI: false },
-      ])
+    switch (type) {
+      case "single":
+        setPlayerNames(["Player 1", "Computer"])
+        setComputerPlayers([false, true])
+        break
+      case "double":
+        setPlayerNames(["Player 1", "Player 2"])
+        setComputerPlayers([false, false])
+        break
+      case "multi":
+        setPlayerNames(["Player 1", "Player 2", "Player 3"])
+        setComputerPlayers([false, false, false])
+        break
     }
+    setNameErrors([])
+  }
+
+  const handlePlayerNameChange = (index: number, name: string) => {
+    const newNames = [...playerNames]
+    newNames[index] = name
+    setPlayerNames(newNames)
+
+    // Validate name
+    const errors = [...nameErrors]
+    errors[index] = name.trim() === "" ? "Name cannot be empty" : ""
+    setNameErrors(errors)
+  }
+
+  const toggleComputerPlayer = (index: number) => {
+    if (gameType === "single" && index === 1) return // Computer must be player 2 in single player
+
+    const newComputerPlayers = [...computerPlayers]
+    newComputerPlayers[index] = !newComputerPlayers[index]
+    setComputerPlayers(newComputerPlayers)
   }
 
   const addPlayer = () => {
-    if (players.length < 6) {
-      const newPlayer = {
-        id: `player${players.length + 1}`,
-        name: `Player ${players.length + 1}`,
-        color: PLAYER_COLORS[players.length % PLAYER_COLORS.length],
-        isAI: false,
-      }
-      setPlayers([...players, newPlayer])
+    if (playerNames.length < 6) {
+      setPlayerNames([...playerNames, `Player ${playerNames.length + 1}`])
+      setComputerPlayers([...computerPlayers, false])
+      setNameErrors([...nameErrors, ""])
     }
   }
 
   const removePlayer = (index: number) => {
-    if (players.length > 2 && index > 0) {
-      setPlayers(players.filter((_, i) => i !== index))
+    if (playerNames.length > 2) {
+      const newNames = playerNames.filter((_, i) => i !== index)
+      const newComputers = computerPlayers.filter((_, i) => i !== index)
+      const newErrors = nameErrors.filter((_, i) => i !== index)
+      setPlayerNames(newNames)
+      setComputerPlayers(newComputers)
+      setNameErrors(newErrors)
     }
-  }
-
-  const updatePlayer = (index: number, field: string, value: any) => {
-    const updatedPlayers = [...players]
-    updatedPlayers[index] = { ...updatedPlayers[index], [field]: value }
-    setPlayers(updatedPlayers)
   }
 
   const handleStartGame = () => {
+    // Validate names
+    const errors = playerNames.map((name, index) =>
+      name.trim() === "" ? "Name cannot be empty" : playerNames.indexOf(name) !== index ? "Names must be unique" : ""
+    )
+    setNameErrors(errors)
+    if (errors.some((error) => error !== "")) return
+
+    const players = playerNames.map((name, index) => ({
+      id: `player_${index}_${Date.now()}`,
+      name: name || `Player ${index + 1}`,
+      isComputer: computerPlayers[index],
+      isHost: index === 0,
+      color: playerColors[index % playerColors.length],
+    }))
+
+    const difficulty = gridSize <= 4 ? "easy" : gridSize <= 6 ? "medium" : "hard"
     const config: GameConfig = {
       gameType,
-      mode,
+      players,
       gridSize,
       difficulty,
       voiceChatEnabled,
-      players,
     }
+
     onStartGame(config)
+  }
+
+  const getMaxPlayers = () => {
+    switch (gameType) {
+      case "single":
+        return 2
+      case "double":
+        return 2
+      case "multi":
+        return 6
+      default:
+        return 2
+    }
   }
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-slate-800 border-slate-700 text-white">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-cyan-400">
-            <Gamepad2 className="w-5 h-5" />
-            Game Setup
-          </DialogTitle>
-        </DialogHeader>
+      <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-2xl max-h-[90vh] overflow-y-auto pt-8" aria-label="Game setup modal">
+        <DialogHeader></DialogHeader>
 
-        <Tabs defaultValue="game" className="w-full">
-          <TabsList className="grid w-full grid-cols-3 bg-slate-700">
-            <TabsTrigger value="game" className="data-[state=active]:bg-slate-600">
-              Game
-            </TabsTrigger>
-            <TabsTrigger value="players" className="data-[state=active]:bg-slate-600">
-              Players
-            </TabsTrigger>
-            <TabsTrigger value="settings" className="data-[state=active]:bg-slate-600">
-              Rules
-            </TabsTrigger>
-          </TabsList>
+        <div className="space-y-6 py-4">
+          {/* Game Type Selection */}
+          <div>
+            <h3 className="text-white font-medium mb-3">Game Type</h3>
+            <div className="grid grid-cols-3 gap-3">
+              <Button
+                variant={gameType === "single" ? "default" : "outline"}
+                className={`p-4 h-auto flex flex-col gap-2 ${
+                  gameType === "single"
+                    ? "bg-cyan-500 hover:bg-cyan-600"
+                    : "border-slate-600 hover:bg-slate-700 bg-transparent"
+                }`}
+                onClick={() => handleGameTypeChange("single")}
+                aria-label="Select single player mode (vs Computer)"
+              >
+                <User className="w-6 h-6" />
+                <span className="text-sm">Single Player</span>
+                <span className="text-xs opacity-70">vs Computer</span>
+              </Button>
 
-          <TabsContent value="game" className="space-y-4">
-            <Card className="bg-slate-700 border-slate-600">
-              <CardHeader>
-                <CardTitle className="text-white">Game Mode</CardTitle>
-                <CardDescription className="text-gray-300">Choose how you want to play</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Button
+                variant={gameType === "double" ? "default" : "outline"}
+                className={`p-4 h-auto flex flex-col gap-2 ${
+                  gameType === "double"
+                    ? "bg-cyan-500 hover:bg-cyan-600"
+                    : "border-slate-600 hover:bg-slate-700 bg-transparent"
+                }`}
+                onClick={() => handleGameTypeChange("double")}
+                aria-label="Select double player mode (online)"
+              >
+                <Users className="w-6 h-6" />
+                <span className="text-sm">Double Player</span>
+                <span className="text-xs opacity-70">Online</span>
+              </Button>
+
+              <Button
+                variant={gameType === "multi" ? "default" : "outline"}
+                className={`p-4 h-auto flex flex-col gap-2 ${
+                  gameType === "multi"
+                    ? "bg-cyan-500 hover:bg-cyan-600"
+                    : "border-slate-600 hover:bg-slate-700 bg-transparent"
+                }`}
+                onClick={() => handleGameTypeChange("multi")}
+                aria-label="Select multiplayer mode (up to 6 players)"
+              >
+                <Gamepad2 className="w-6 h-6" />
+                <span className="text-sm">Multi Player</span>
+                <span className="text-xs opacity-70">Up to 6 players</span>
+              </Button>
+            </div>
+          </div>
+
+          {/* Grid Size&Voice Chat */}
+          <div className="flex gap-8">
+            <div className="flex-1">
+              <h3 className="text-white font-medium mb-3">Grid Size</h3>
+              <div className="flex gap-3">
+                {[4, 5, 6, 7, 8].map((size) => (
                   <Button
-                    variant={mode === "single" ? "default" : "outline"}
-                    className={`h-20 flex flex-col gap-2 ${
-                      mode === "single" ? "bg-cyan-500 hover:bg-cyan-600" : "border-slate-600 hover:bg-slate-600"
+                    key={size}
+                    variant={gridSize === size ? "default" : "outline"}
+                    className={`${
+                      gridSize === size
+                        ? "bg-cyan-500 hover:bg-cyan-600"
+                        : "border-slate-600 hover:bg-slate-700 bg-transparent"
                     }`}
-                    onClick={() => handleModeChange("single")}
+                    onClick={() => setGridSize(size)}
+                    aria-label={`Select ${size}x${size} grid size`}
                   >
-                    <Bot className="w-6 h-6" />
-                    <span>vs AI</span>
+                    {size}×{size}
                   </Button>
-
-                  <Button
-                    variant={mode === "multi" ? "default" : "outline"}
-                    className={`h-20 flex flex-col gap-2 ${
-                      mode === "multi" ? "bg-cyan-500 hover:bg-cyan-600" : "border-slate-600 hover:bg-slate-600"
-                    }`}
-                    onClick={() => handleModeChange("multi")}
-                  >
-                    <Users className="w-6 h-6" />
-                    <span>Multiplayer</span>
-                  </Button>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-white">Grid Size</Label>
-                  <Select value={gridSize.toString()} onValueChange={(value) => setGridSize(Number.parseInt(value))}>
-                    <SelectTrigger className="bg-slate-600 border-slate-500 text-white">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="bg-slate-700 border-slate-600">
-                      <SelectItem value="4">4x4 (Beginner)</SelectItem>
-                      <SelectItem value="5">5x5 (Intermediate)</SelectItem>
-                      <SelectItem value="6">6x6 (Advanced)</SelectItem>
-                      <SelectItem value="7">7x7 (Expert)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {mode === "single" && (
-                  <div className="space-y-2">
-                    <Label className="text-white">AI Difficulty</Label>
-                    <Select
-                      value={difficulty}
-                      onValueChange={(value: "easy" | "medium" | "hard") => setDifficulty(value)}
-                    >
-                      <SelectTrigger className="bg-slate-600 border-slate-500 text-white">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-700 border-slate-600">
-                        <SelectItem value="easy">Easy</SelectItem>
-                        <SelectItem value="medium">Medium</SelectItem>
-                        <SelectItem value="hard">Hard</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="players" className="space-y-4">
-            <Card className="bg-slate-700 border-slate-600">
-              <CardHeader>
-                <CardTitle className="text-white flex items-center gap-2">
-                  <Users className="w-5 h-5" />
-                  Players ({players.length})
-                </CardTitle>
-                <CardDescription className="text-gray-300">
-                  {mode === "single" && "Playing against AI"}
-                  {mode === "multi" && "Multiplayer game with up to 6 players"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {players.map((player, index) => (
-                  <div key={player.id} className="flex items-center gap-4 p-3 bg-slate-600 rounded-lg">
-                    <div
-                      className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold"
-                      style={{ backgroundColor: player.color }}
-                    >
-                      {player.name[0]}
-                    </div>
-
-                    <div className="flex-1">
-                      <Input
-                        value={player.name}
-                        onChange={(e) => updatePlayer(index, "name", e.target.value)}
-                        className="bg-slate-500 border-slate-400 text-white"
-                        placeholder="Enter your name"
-                      />
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <Palette className="w-4 h-4 text-gray-400" />
-                      <Select value={player.color} onValueChange={(value) => updatePlayer(index, "color", value)}>
-                        <SelectTrigger className="w-12 h-8 p-0 border-0">
-                          <div className="w-6 h-6 rounded-full mx-auto" style={{ backgroundColor: player.color }} />
-                        </SelectTrigger>
-                        <SelectContent className="bg-slate-700 border-slate-600">
-                          {PLAYER_COLORS.map((color) => (
-                            <SelectItem key={color} value={color}>
-                              <div className="flex items-center gap-2">
-                                <div className="w-4 h-4 rounded-full" style={{ backgroundColor: color }} />
-                                <span className="text-white">{color}</span>
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {mode === "multi" && (
-                      <div className="flex items-center gap-2">
-                        <Switch
-                          checked={player.isAI}
-                          onCheckedChange={(checked) => updatePlayer(index, "isAI", checked)}
-                          disabled={index === 0} // Host can't be AI
-                        />
-                        <Label className="text-sm text-gray-300">AI</Label>
-                      </div>
-                    )}
-
-                    {index === 0 && <Badge variant="secondary">Host</Badge>}
-
-                    {mode === "multi" && index > 1 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removePlayer(index)}
-                        className="text-red-400 hover:text-red-300 hover:bg-red-500/20"
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </div>
                 ))}
+              </div>
+            </div>
 
-                {mode === "multi" && players.length < 6 && (
+            {(gameType === "double" || gameType === "multi") && (
+              <div className="flex-1">
+                <h3 className="text-white font-medium mb-3">Voice Chat</h3>
+                <div className="flex gap-3">
                   <Button
-                    variant="outline"
-                    onClick={addPlayer}
-                    className="w-full border-slate-600 hover:bg-slate-600 text-white bg-transparent"
+                    variant={voiceChatEnabled ? "default" : "outline"}
+                    className={`flex items-center gap-2 ${
+                      voiceChatEnabled
+                        ? "bg-cyan-500 hover:bg-cyan-600"
+                        : "border-slate-600 hover:bg-slate-700 bg-transparent"
+                    }`}
+                    onClick={() => setVoiceChatEnabled(true)}
+                    aria-label="Enable voice chat"
                   >
-                    Add Player
+                    <Mic className="w-4 h-4" />
+                    Enabled
                   </Button>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="settings" className="space-y-4">
-            <Card className="bg-slate-700 border-slate-600">
-              <CardHeader>
-                <CardTitle className="text-white flex items-center gap-2">
-                  <Settings className="w-5 h-5" />
-                  Game Rules
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label className="text-white"></Label>
-                  <div className="text-sm text-gray-300 space-y-1">
-                    <p>• Connect dots to form boxes</p>
-                    <p>• Complete a box to score a point</p>
-                    <p>• Get another turn when you complete a box</p>
-                    <p>• Player with most boxes wins</p>
-                  </div>
+                  <Button
+                    variant={!voiceChatEnabled ? "default" : "outline"}
+                    className={`flex items-center gap-2 ${
+                      !voiceChatEnabled
+                        ? "bg-cyan-500 hover:bg-cyan-600"
+                        : "border-slate-600 hover:bg-slate-700 bg-transparent"
+                    }`}
+                    onClick={() => setVoiceChatEnabled(false)}
+                    aria-label="Disable voice chat"
+                  >
+                    <MicOff className="w-4 h-4" />
+                    Disabled
+                  </Button>
                 </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+              </div>
+            )}
+          </div>
 
-        <div className="flex justify-end gap-3 pt-4 border-t border-slate-700">
-          <Button variant="outline" onClick={onClose} className="border-slate-600 hover:bg-slate-700 bg-transparent">
-            Cancel
-          </Button>
-          <Button onClick={handleStartGame} className="bg-cyan-500 hover:bg-cyan-600">
-            Start Game
-          </Button>
+          {/* Players Configuration */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-white font-medium">Players</h3>
+              {gameType === "multi" && playerNames.length < getMaxPlayers() && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="border-slate-600 hover:bg-slate-700 bg-transparent"
+                  onClick={addPlayer}
+                  aria-label="Add new player"
+                >
+                  +
+                </Button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {playerNames.map((name, index) => (
+                <div key={index} className="flex items-center gap-2 p-2 bg-slate-700/50 rounded-lg flex-1 min-w-0">
+                  <div
+                    className="w-4 h-4 rounded-full border-2 border-white"
+                    style={{ backgroundColor: playerColors[index % playerColors.length] }}
+                  />
+
+                  <div className="flex-1">
+                    <Input
+                      value={name}
+                      onChange={(e) => handlePlayerNameChange(index, e.target.value)}
+                      className="bg-slate-600 border-slate-500 text-white"
+                      placeholder={`Player ${index + 1}`}
+                      aria-label={`Player ${index + 1} name`}
+                    />
+                    {nameErrors[index] && (
+                      <span className="text-red-400 text-xs">{nameErrors[index]}</span>
+                    )}
+                  </div>
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`${
+                      computerPlayers[index]
+                        ? "text-orange-400 hover:text-orange-300"
+                        : "text-gray-400 hover:text-white"
+                    }`}
+                    onClick={() => toggleComputerPlayer(index)}
+                    disabled={gameType === "single" && index === 1}
+                    aria-label={`Toggle computer player for Player ${index + 1}`}
+                  >
+                    <Bot className="w-4 h-4" />
+                  </Button>
+
+                  {gameType === "multi" && playerNames.length > 2 && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-red-400 hover:text-red-300"
+                      onClick={() => removePlayer(index)}
+                      aria-label={`Remove Player ${index + 1}`}
+                    >
+                      ×
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-4 justify-center pt-4">
+            <Button onClick={handleStartGame} className="bg-cyan-500 hover:bg-cyan-600 px-8" aria-label="Start game">
+              Start Game
+            </Button>
+            <Button
+              onClick={onClose}
+              variant="outline"
+              className="border-slate-600 text-white hover:bg-slate-700 bg-transparent px-8"
+              aria-label="Cancel setup"
+            >
+              Cancel
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

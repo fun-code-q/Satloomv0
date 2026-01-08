@@ -1,19 +1,12 @@
 import { database } from "@/lib/firebase"
-import { ref, push, set, onValue, remove, update } from "firebase/database"
+import { ref, push, set, onValue, query, orderByChild, limitToLast, remove, update } from "firebase/database"
 import type { Message } from "@/components/message-bubble"
 
-/**
- * MessageStorage - handles all chat/quiz/game messages for a room.
- * Exposed as BOTH a named and default export so legacy code that uses
- * `import MessageStorage …` and the newer `import { MessageStorage } …`
- * continue to work.
- */
 export class MessageStorage {
   private static instance: MessageStorage
-  private messageListeners: Array<() => void> = []
+  private messageListeners: Map<string, () => void> = new Map()
   private currentRoomId: string | null = null
 
-  /* ----------------------------  SINGLETON  ---------------------------- */
   static getInstance(): MessageStorage {
     if (!MessageStorage.instance) {
       MessageStorage.instance = new MessageStorage()
@@ -21,76 +14,105 @@ export class MessageStorage {
     return MessageStorage.instance
   }
 
-  /* ---------------------------  UTILITIES  ----------------------------- */
-  /** Recursively strips `undefined` so Firebase won't reject the payload. */
+  // Clean data before sending to Firebase (remove undefined values)
   private cleanData(obj: any): any {
-    if (obj === null || obj === undefined) return null
-    if (Array.isArray(obj)) {
-      return obj.map((i) => this.cleanData(i)).filter((v) => v !== undefined)
+    if (obj === null || obj === undefined) {
+      return null
     }
+
+    if (Array.isArray(obj)) {
+      return obj.map((item) => this.cleanData(item)).filter((item) => item !== undefined)
+    }
+
     if (typeof obj === "object") {
-      const cleaned: Record<string, any> = {}
-      Object.keys(obj).forEach((k) => {
-        const v = this.cleanData(obj[k])
-        if (v !== undefined) cleaned[k] = v
+      const cleaned: any = {}
+      Object.keys(obj).forEach((key) => {
+        const value = this.cleanData(obj[key])
+        if (value !== undefined) {
+          cleaned[key] = value
+        }
       })
       return cleaned
     }
+
     return obj
   }
 
-  /* ---------------------------  SENDERS  ------------------------------- */
+  // Send a message
   async sendMessage(roomId: string, message: Omit<Message, "id">): Promise<string> {
-    if (!database) {
-      throw new Error("Firebase database not initialized")
+    try {
+      if (!database) {
+        console.warn("Firebase database not initialized, message not sent")
+        return ""
+      }
+
+      const messagesRef = ref(database, `rooms/${roomId}/messages`)
+      const newMessageRef = push(messagesRef)
+
+      // Clean the message data to remove undefined values
+      const messageData = this.cleanData({
+        ...message,
+        id: newMessageRef.key,
+        roomId: roomId, // Explicitly add room ID
+        timestamp: message.timestamp.toISOString(),
+        // Ensure replyTo is either a complete object or null
+        replyTo: message.replyTo
+          ? {
+              id: message.replyTo.id || null,
+              text: message.replyTo.text || "",
+              sender: message.replyTo.sender || "",
+            }
+          : null,
+        // Ensure reactions object exists
+        reactions: message.reactions || {
+          heart: [],
+          thumbsUp: [],
+        },
+        // Ensure file is either a complete object or null
+        file: message.file
+          ? {
+              name: message.file.name || "",
+              type: message.file.type || "",
+              url: message.file.url || "",
+              size: message.file.size || 0,
+            }
+          : null,
+        // Handle optional fields
+        edited: message.edited || false,
+        editedAt: message.editedAt ? message.editedAt.toISOString() : null,
+      })
+
+      console.log("Sending message to room:", roomId, messageData)
+      await set(newMessageRef, messageData)
+      console.log("Message sent successfully")
+      return newMessageRef.key!
+    } catch (error) {
+      console.error("Error sending message:", error)
+      throw error
     }
-
-    const messagesRef = ref(database, `rooms/${roomId}/messages`)
-    const newMessageRef = push(messagesRef)
-
-    const messageWithId: Message = {
-      ...message,
-      id: newMessageRef.key!,
-      timestamp: new Date(message.timestamp),
-    }
-
-    await set(newMessageRef, {
-      ...messageWithId,
-      timestamp: messageWithId.timestamp.toISOString(),
-    })
-
-    return newMessageRef.key!
   }
 
-  async sendQuizNotification(roomId: string, hostName: string): Promise<void> {
-    await this.sendMessage(roomId, {
-      text: `🧠 ${hostName} started a quiz! Get ready to test your knowledge!`,
+  // Send quiz notification message
+  async sendQuizNotification(roomId: string, hostName: string, topic?: string): Promise<void> {
+    const message: Omit<Message, "id"> = {
+      text: `🧠 ${hostName} started a ${topic ? `${topic} ` : ""}quiz! Get ready for 10 questions!`,
       sender: "System",
       timestamp: new Date(),
-      type: "quiz-notification",
+      type: "quiz",
       reactions: {
         heart: [],
         thumbsUp: [],
       },
-    })
-  }
-
-  async sendQuizResults(roomId: string, results: any[], totalQuestions: number): Promise<void> {
-    const sortedResults = results.sort((a, b) => b.score - a.score)
-    const winner = sortedResults[0]
-
-    let resultText = `🏆 Quiz Results!\n\n`
-    sortedResults.forEach((result, index) => {
-      const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "🏅"
-      resultText += `${medal} ${result.playerName}: ${result.score}/${totalQuestions} (${Math.round((result.score / totalQuestions) * 100)}%)\n`
-    })
-
-    if (winner) {
-      resultText += `\n🎉 Congratulations ${winner.playerName}!`
     }
 
-    await this.sendMessage(roomId, {
-      text: resultText,
+    await this.sendMessage(roomId, message)
+  }
+
+  // Send quiz results message
+  async sendQuizResults(roomId: string, results: any[], totalQuestions: number): Promise<void> {
+    const winner = results[0]
+    const message: Omit<Message, "id"> = {
+      text: `🏆 Quiz completed! ${winner?.playerName || "Someone"} won with ${winner?.score || 0}/${totalQuestions} correct answers!`,
       sender: "System",
       timestamp: new Date(),
       type: "quiz-results",
@@ -98,94 +120,199 @@ export class MessageStorage {
         heart: [],
         thumbsUp: [],
       },
-    })
+    }
+
+    await this.sendMessage(roomId, message)
   }
 
-  /* ----------------------------  LISTENERS  ---------------------------- */
-  listenForMessages(roomId: string, onMessagesUpdate: (messages: Message[]) => void): () => void {
+  // Listen for messages
+  listenForMessages(roomId: string, onMessage: (messages: Message[]) => void, limit = 50) {
+    console.log("Setting up message listener for room:", roomId)
+
+    // Always clear messages immediately when setting up a new listener
+    onMessage([])
+
+    // If switching rooms, clean up previous listeners aggressively
+    if (this.currentRoomId && this.currentRoomId !== roomId) {
+      console.log("Switching from room", this.currentRoomId, "to", roomId)
+      this.cleanupRoom(this.currentRoomId)
+      // Force clear messages again after cleanup
+      onMessage([])
+    }
+
+    this.currentRoomId = roomId
+
     if (!database) {
-      console.warn("Firebase database not initialized, message listening disabled")
+      console.warn("Firebase database not initialized, no messages will be loaded")
+      onMessage([])
       return () => {}
     }
 
-    const messagesRef = ref(database, `rooms/${roomId}/messages`)
+    const messagesRef = query(ref(database, `rooms/${roomId}/messages`), orderByChild("timestamp"), limitToLast(limit))
 
-    const unsubscribe = onValue(messagesRef, (snapshot) => {
-      const messagesData = snapshot.val()
-      if (messagesData) {
-        const messages: Message[] = Object.entries(messagesData).map(([id, data]: [string, any]) => ({
-          ...data,
-          id,
-          timestamp: new Date(data.timestamp),
-        }))
+    const unsubscribe = onValue(
+      messagesRef,
+      (snapshot) => {
+        console.log("Received message snapshot for room:", roomId)
+        const data = snapshot.val()
 
-        // Sort messages by timestamp
-        messages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-        onMessagesUpdate(messages)
-      } else {
-        onMessagesUpdate([])
-      }
-    })
+        if (data) {
+          const messages: Message[] = Object.entries(data)
+            .map(([id, msg]: [string, any]) => ({
+              ...msg,
+              id,
+              timestamp: new Date(msg.timestamp),
+              editedAt: msg.editedAt ? new Date(msg.editedAt) : undefined,
+              // Ensure reactions exist
+              reactions: msg.reactions || { heart: [], thumbsUp: [] },
+              // Clean up null values
+              replyTo: msg.replyTo || undefined,
+              file: msg.file || undefined,
+            }))
+            .filter((msg: Message) => {
+              // STRICT room ID filtering - only show messages from current room
+              const messageRoomId = (msg as any).roomId
+              const isFromCurrentRoom = messageRoomId === roomId
 
-    this.messageListeners.push(unsubscribe)
+              if (!isFromCurrentRoom) {
+                console.log("Filtering out message from different room:", messageRoomId, "current:", roomId)
+                return false
+              }
+
+              // Only show messages from the last hour to prevent old messages
+              const now = new Date()
+              const messageAge = now.getTime() - msg.timestamp.getTime()
+              const isRecent = messageAge < 60 * 60 * 1000 // 1 hour instead of 24 hours
+
+              if (!isRecent) {
+                console.log("Filtering out old message:", msg.timestamp)
+                return false
+              }
+
+              return true
+            })
+
+          // Sort by timestamp
+          messages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+          console.log(`Loaded ${messages.length} messages for room ${roomId}`)
+
+          // Double-check we're still listening for the same room before updating
+          if (this.currentRoomId === roomId) {
+            onMessage(messages)
+          } else {
+            console.log("Room changed during message loading, ignoring messages")
+            onMessage([])
+          }
+        } else {
+          console.log("No messages found for room:", roomId)
+          if (this.currentRoomId === roomId) {
+            onMessage([])
+          }
+        }
+      },
+      (error) => {
+        console.error("Error listening for messages:", error)
+        if (this.currentRoomId === roomId) {
+          onMessage([])
+        }
+      },
+    )
+
+    // Store the unsubscribe function with room ID
+    this.messageListeners.set(roomId, unsubscribe)
     return unsubscribe
   }
 
-  /* ---------------------------  MESSAGE OPS  --------------------------- */
-  async addReaction(roomId: string, messageId: string, reaction: "heart" | "thumbsUp", userId: string): Promise<void> {
-    if (!database) return
-
-    const messageRef = ref(database, `rooms/${roomId}/messages/${messageId}/reactions/${reaction}`)
-
-    // Get current reactions
-    const currentReactions = await new Promise<string[]>((resolve) => {
-      onValue(
-        messageRef,
-        (snapshot) => {
-          const reactions = snapshot.val() || []
-          resolve(reactions)
-        },
-        { onlyOnce: true },
-      )
-    })
-
-    let updatedReactions: string[]
-    if (currentReactions.includes(userId)) {
-      // Remove reaction
-      updatedReactions = currentReactions.filter((id) => id !== userId)
-    } else {
-      // Add reaction
-      updatedReactions = [...currentReactions, userId]
-    }
-
-    await set(messageRef, updatedReactions)
-  }
-
+  // Edit a message
   async editMessage(roomId: string, messageId: string, newText: string): Promise<void> {
-    if (!database) return
+    try {
+      if (!database) return
 
-    const messageRef = ref(database, `rooms/${roomId}/messages/${messageId}`)
-    await update(messageRef, {
-      text: newText,
-      edited: true,
-      editedAt: new Date().toISOString(),
-    })
+      const messageRef = ref(database, `rooms/${roomId}/messages/${messageId}`)
+      const updateData = this.cleanData({
+        text: newText,
+        edited: true,
+        editedAt: new Date().toISOString(),
+      })
+      await update(messageRef, updateData)
+    } catch (error) {
+      console.error("Error editing message:", error)
+      throw error
+    }
   }
 
+  // Delete a message
   async deleteMessage(roomId: string, messageId: string): Promise<void> {
-    if (!database) return
+    try {
+      if (!database) return
 
-    const messageRef = ref(database, `rooms/${roomId}/messages/${messageId}`)
-    await remove(messageRef)
+      const messageRef = ref(database, `rooms/${roomId}/messages/${messageId}`)
+      await remove(messageRef)
+    } catch (error) {
+      console.error("Error deleting message:", error)
+      throw error
+    }
   }
 
-  /* ---------------------------  CLEAN-UP  ------------------------------ */
-  cleanup(): void {
-    this.messageListeners.forEach((unsubscribe) => unsubscribe())
-    this.messageListeners = []
+  // Add reaction to message
+  async addReaction(roomId: string, messageId: string, reaction: "heart" | "thumbsUp", userId: string): Promise<void> {
+    try {
+      if (!database) return
+
+      const reactionRef = ref(database, `rooms/${roomId}/messages/${messageId}/reactions/${reaction}`)
+
+      // Get current reactions
+      const snapshot = await new Promise<any>((resolve) => {
+        onValue(reactionRef, resolve, { onlyOnce: true })
+      })
+
+      const currentReactions = snapshot.val() || []
+
+      // Toggle reaction
+      let newReactions
+      if (currentReactions.includes(userId)) {
+        newReactions = currentReactions.filter((id: string) => id !== userId)
+      } else {
+        newReactions = [...currentReactions, userId]
+      }
+
+      await set(reactionRef, newReactions)
+    } catch (error) {
+      console.error("Error adding reaction:", error)
+      throw error
+    }
+  }
+
+  // Clean up specific room listeners more aggressively
+  private cleanupRoom(roomId: string) {
+    const unsubscribe = this.messageListeners.get(roomId)
+    if (unsubscribe) {
+      console.log("Cleaning up listeners for room:", roomId)
+      unsubscribe()
+      this.messageListeners.delete(roomId)
+    }
+  }
+
+  // Enhanced clear messages for room switching
+  clearMessages() {
+    console.log("Clearing message cache and resetting current room")
+    this.currentRoomId = null
+    // Force cleanup of all listeners to prevent cross-contamination
+    this.cleanup()
+  }
+
+  // More thorough cleanup
+  cleanup() {
+    console.log("Cleaning up all message listeners and resetting state")
+    this.messageListeners.forEach((unsubscribe, roomId) => {
+      console.log("Cleaning up listener for room:", roomId)
+      try {
+        unsubscribe()
+      } catch (error) {
+        console.error("Error cleaning up listener for room:", roomId, error)
+      }
+    })
+    this.messageListeners.clear()
     this.currentRoomId = null
   }
 }
-
-/* Provide a default export for older imports (import MessageStorage …) */
-export default MessageStorage

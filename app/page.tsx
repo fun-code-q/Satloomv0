@@ -23,14 +23,12 @@ export default function Home() {
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [isCreatingRoom, setIsCreatingRoom] = useState(false)
   const [error, setError] = useState<string>("")
-  const [isRoomCreator, setIsRoomCreator] = useState(false)
 
   const notificationSystem = NotificationSystem.getInstance()
 
   useEffect(() => {
     console.log("App: Current room ID:", currentRoomId)
     console.log("App: Current state:", appState)
-    console.log("App: Database available:", !!database)
   }, [currentRoomId, appState])
 
   useEffect(() => {
@@ -63,16 +61,9 @@ export default function Home() {
 
   const handleCreateRoom = async () => {
     console.log("App: Creating new room")
-
-    if (!database) {
-      setError("Database not available. Please check your Firebase configuration.")
-      return
-    }
-
     setIsCreatingRoom(true)
     setError("")
     setShowProfileModal(true)
-    setIsRoomCreator(true) // Mark as room creator
   }
 
   const handleJoinRoom = async (roomId: string) => {
@@ -88,11 +79,10 @@ export default function Home() {
 
     setError("")
     setCurrentRoomId(cleanRoomId)
-    setIsRoomCreator(false) // Not the room creator when joining
 
     try {
       if (!database) {
-        setError("Database not available. Please check your Firebase configuration.")
+        setError("Database not available. Please try again later.")
         setCurrentRoomId("") // Clear on error
         return
       }
@@ -105,12 +95,6 @@ export default function Home() {
         setError("Room not found. Please check the room ID.")
         setCurrentRoomId("") // Clear on error
         return
-      }
-
-      // Check if user is the creator of this room
-      const roomData = snapshot.val()
-      if (roomData.createdBy === userProfile.name) {
-        setIsRoomCreator(true)
       }
 
       console.log("App: Successfully found room:", cleanRoomId)
@@ -137,7 +121,6 @@ export default function Home() {
         roomId = generateRoomId()
         console.log("App: Creating new room with ID:", roomId)
         setCurrentRoomId(roomId)
-        setIsRoomCreator(true) // Ensure creator flag is set
 
         if (database) {
           // Create room in Firebase
@@ -247,28 +230,6 @@ export default function Home() {
   // Debug render
   console.log("App: Rendering with state:", { appState, currentRoomId, isCreatingRoom })
 
-  // Show Firebase configuration error if database is not available
-  if (!database) {
-    return (
-      <ThemeProvider>
-        <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-          <div className="text-white text-center max-w-md p-6">
-            <h1 className="text-2xl font-bold mb-4">Configuration Error</h1>
-            <p className="mb-4">Firebase is not properly configured. Please check your environment variables:</p>
-            <ul className="text-left text-sm space-y-1 mb-4">
-              <li>• NEXT_PUBLIC_FIREBASE_PROJECT_ID</li>
-              <li>• NEXT_PUBLIC_FIREBASE_DATABASE_URL</li>
-              <li>• NEXT_PUBLIC_FIREBASE_API_KEY</li>
-              <li>• NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN</li>
-              <li>• NEXT_PUBLIC_FIREBASE_APP_ID</li>
-            </ul>
-            <p className="text-sm text-gray-400">Check the browser console for more details.</p>
-          </div>
-        </div>
-      </ThemeProvider>
-    )
-  }
-
   return (
     <ThemeProvider>
       <div className="min-h-screen bg-slate-900">
@@ -277,12 +238,7 @@ export default function Home() {
         )}
 
         {appState === "chat" && currentRoomId && (
-          <ChatInterface
-            roomId={currentRoomId}
-            userProfile={userProfile}
-            onLeave={handleLeaveRoom}
-            isHost={isRoomCreator}
-          />
+          <ChatInterface roomId={currentRoomId} userProfile={userProfile} onLeave={handleLeaveRoom} />
         )}
 
         {appState === "chat" && !currentRoomId && (

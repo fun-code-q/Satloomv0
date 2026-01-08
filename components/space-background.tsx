@@ -2,11 +2,17 @@
 
 import { useEffect, useRef } from "react"
 
-interface SpaceBackgroundProps {
-  backgroundImage?: string | null
+interface Particle {
+  x: number
+  y: number
+  size: number
+  speedX: number
+  speedY: number
+  color: string
+  opacity: number
 }
 
-export function SpaceBackground({ backgroundImage }: SpaceBackgroundProps) {
+export function SpaceBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -16,88 +22,61 @@ export function SpaceBackground({ backgroundImage }: SpaceBackgroundProps) {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Set canvas size to match viewport
+    const particles: Particle[] = []
+    const colors = ["#60A5FA", "#A78BFA", "#F472B6", "#34D399", "#FBBF24"]
+
     const resizeCanvas = () => {
       canvas.width = window.innerWidth
       canvas.height = window.innerHeight
     }
 
-    resizeCanvas()
-    window.addEventListener("resize", resizeCanvas)
-
-    // Stars array
-    const stars: Array<{ x: number; y: number; size: number; opacity: number; speed: number }> = []
-
-    // Create stars
-    for (let i = 0; i < 200; i++) {
-      stars.push({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
-        size: Math.random() * 2,
-        opacity: Math.random(),
-        speed: Math.random() * 0.5 + 0.1,
-      })
+    const createParticles = () => {
+      for (let i = 0; i < 50; i++) {
+        particles.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height,
+          size: Math.random() * 60 + 20,
+          speedX: (Math.random() - 0.5) * 0.5,
+          speedY: (Math.random() - 0.5) * 0.5,
+          color: colors[Math.floor(Math.random() * colors.length)],
+          opacity: Math.random() * 0.3 + 0.1,
+        })
+      }
     }
 
-    // Animation loop
-    let animationId: number
     const animate = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      // Draw stars
-      stars.forEach((star) => {
+      particles.forEach((particle) => {
+        particle.x += particle.speedX
+        particle.y += particle.speedY
+
+        if (particle.x < 0 || particle.x > canvas.width) particle.speedX *= -1
+        if (particle.y < 0 || particle.y > canvas.height) particle.speedY *= -1
+
+        ctx.globalAlpha = particle.opacity
+        ctx.fillStyle = particle.color
         ctx.beginPath()
-        ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2)
-        ctx.fillStyle = `rgba(255, 255, 255, ${star.opacity})`
+        ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2)
         ctx.fill()
-
-        // Move stars
-        star.y += star.speed
-        star.opacity = Math.sin(Date.now() * 0.001 + star.x) * 0.5 + 0.5
-
-        // Reset star position when it goes off screen
-        if (star.y > canvas.height) {
-          star.y = -star.size
-          star.x = Math.random() * canvas.width
-        }
       })
 
-      animationId = requestAnimationFrame(animate)
+      requestAnimationFrame(animate)
     }
 
+    resizeCanvas()
+    createParticles()
     animate()
 
-    return () => {
-      window.removeEventListener("resize", resizeCanvas)
-      cancelAnimationFrame(animationId)
-    }
-  }, [backgroundImage]) // Re-run when backgroundImage changes
-
-  const hasValidBackground = backgroundImage && backgroundImage.trim() !== ""
+    window.addEventListener("resize", resizeCanvas)
+    return () => window.removeEventListener("resize", resizeCanvas)
+  }, [])
 
   return (
-    <>
-      <canvas
-        ref={canvasRef}
-        className={`fixed inset-0 -z-10 w-full h-full transition-opacity duration-1000 ${
-          hasValidBackground ? "opacity-0" : "opacity-100"
-        }`}
-        style={{
-          background: "linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #1e3a8a 100%)",
-          maxWidth: "100vw",
-          maxHeight: "100vh",
-        }}
-      />
-      {/* Custom Background Layer */}
-      <div
-        className={`fixed inset-0 -z-10 w-full h-full bg-cover bg-center bg-no-repeat transition-opacity duration-1000 ${
-          hasValidBackground ? "opacity-100" : "opacity-0"
-        }`}
-        style={{
-          backgroundImage: hasValidBackground ? `url(${backgroundImage})` : "none",
-          backgroundColor: "#0f172a", // Fallback
-        }}
-      />
-    </>
+    <canvas
+      ref={canvasRef}
+      className="fixed inset-0 -z-10"
+      style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%)" }}
+    />
   )
 }

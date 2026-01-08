@@ -1,6 +1,5 @@
 import { database } from "@/lib/firebase"
 import { ref, push, set, onValue, remove, update, get } from "firebase/database"
-import { WebRTCSignaling } from "./webrtc-signaling"
 
 export interface CallData {
   id: string
@@ -16,7 +15,6 @@ export interface CallData {
 export class CallSignaling {
   private static instance: CallSignaling
   private callListeners: Map<string, () => void> = new Map()
-  private webrtcSignaling = WebRTCSignaling.getInstance()
 
   static getInstance(): CallSignaling {
     if (!CallSignaling.instance) {
@@ -87,15 +85,6 @@ export class CallSignaling {
         })
 
         console.log("Call answered:", callId)
-
-        // Start WebRTC connection
-        const isVideo = callData.type === "video"
-        const remoteUserId =
-          callData.callerId === userId ? updatedParticipants.find((p) => p !== userId) : callData.callerId
-
-        if (remoteUserId) {
-          await this.webrtcSignaling.answerCall(roomId, callId, userId, remoteUserId, isVideo)
-        }
       }
     } catch (error) {
       console.error("Error answering call:", error)
@@ -112,9 +101,6 @@ export class CallSignaling {
 
       console.log("Call ended:", callId)
 
-      // End WebRTC connection
-      this.webrtcSignaling.endCall(callId)
-
       // Remove call data after 5 seconds
       setTimeout(async () => {
         try {
@@ -129,32 +115,6 @@ export class CallSignaling {
     }
   }
 
-  async initiateWebRTCCall(
-    roomId: string,
-    callId: string,
-    localUserId: string,
-    remoteUserId: string,
-    isVideo: boolean,
-  ): Promise<MediaStream> {
-    return await this.webrtcSignaling.startCall(roomId, callId, localUserId, remoteUserId, isVideo)
-  }
-
-  getLocalStream(callId: string): MediaStream | null {
-    return this.webrtcSignaling.getLocalStream(callId)
-  }
-
-  async switchCamera(callId: string, facingMode: "user" | "environment"): Promise<MediaStream> {
-    return this.webrtcSignaling.switchCamera(callId, facingMode)
-  }
-
-  getRemoteStream(callId: string): MediaStream | null {
-    return this.webrtcSignaling.getRemoteStream(callId)
-  }
-
-  setRemoteStreamCallback(callback: (callId: string, stream: MediaStream) => void): void {
-    this.webrtcSignaling.onRemoteStream = callback
-  }
-
   listenForCalls(
     roomId: string,
     currentUserId: string,
@@ -165,10 +125,12 @@ export class CallSignaling {
 
     const callsRef = ref(database, `calls/${roomId}`)
 
-    const unsubscribe = onValue(callsRef, async (snapshot) => {
+    const unsubscribe = onValue(callsRef, (snapshot) => {
       const calls = snapshot.val()
       if (calls) {
-        for (const callData of Object.values(calls) as CallData[]) {
+        Object.values(calls).forEach((call: any) => {
+          const callData = call as CallData
+
           // Handle incoming calls (for other users)
           if (callData.status === "ringing" && callData.callerId !== currentUserId) {
             console.log("Incoming call detected:", callData)
@@ -179,31 +141,8 @@ export class CallSignaling {
           if (callData.participants.includes(currentUserId) || callData.callerId === currentUserId) {
             console.log("Call update:", callData)
             onCallUpdate(callData)
-
-            // If call was just answered, start WebRTC for the caller
-            if (
-              callData.status === "answered" &&
-              callData.callerId === currentUserId &&
-              callData.participants.length > 1
-            ) {
-              const remoteUserId = callData.participants.find((p) => p !== currentUserId)
-              if (remoteUserId && !this.webrtcSignaling.getLocalStream(callData.id)) {
-                try {
-                  console.log("Starting WebRTC connection for answered call")
-                  await this.webrtcSignaling.startCall(
-                    roomId,
-                    callData.id,
-                    currentUserId,
-                    remoteUserId,
-                    callData.type === "video",
-                  )
-                } catch (error) {
-                  console.error("Error starting WebRTC after call answered:", error)
-                }
-              }
-            }
           }
-        }
+        })
       }
     })
 
@@ -219,6 +158,5 @@ export class CallSignaling {
       unsubscribe()
     })
     this.callListeners.clear()
-    this.webrtcSignaling.cleanup()
   }
 }

@@ -2,7 +2,6 @@ export class GameSounds {
   private static instance: GameSounds
   private audioContext: AudioContext | null = null
   private soundEnabled = true
-  private isClient = false
 
   static getInstance(): GameSounds {
     if (!GameSounds.instance) {
@@ -12,17 +11,10 @@ export class GameSounds {
   }
 
   constructor() {
-    // Only initialize on client side
-    if (typeof window !== "undefined") {
-      this.isClient = true
-      this.initAudioContext()
-    }
+    this.initAudioContext()
   }
 
   private initAudioContext() {
-    // Double check we're on client side
-    if (!this.isClient || typeof window === "undefined") return
-
     try {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
     } catch (error) {
@@ -35,7 +27,7 @@ export class GameSounds {
   }
 
   private async playTone(frequency: number, duration: number, volume = 0.3, type: OscillatorType = "sine") {
-    if (!this.isClient || !this.soundEnabled || !this.audioContext) return
+    if (!this.soundEnabled || !this.audioContext) return
 
     try {
       if (this.audioContext.state === "suspended") {

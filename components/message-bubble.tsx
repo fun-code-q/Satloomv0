@@ -29,8 +29,6 @@ export interface Message {
   }
   edited?: boolean
   editedAt?: Date
-  type?: string
-  gameInvite?: any
 }
 
 interface MessageBubbleProps {
@@ -58,57 +56,28 @@ export function MessageBubble({
   onEdit,
   onCopy,
 }: MessageBubbleProps) {
+  const [showReactions, setShowReactions] = useState(false)
   const [showFilePreview, setShowFilePreview] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState(message.text)
 
   const handleReaction = (reaction: "heart" | "thumbsUp") => {
-    console.log("Handling reaction:", reaction, "for message:", message.id)
     onReact(message.id, reaction, currentUser)
-  }
-
-  const handleReply = () => {
-    console.log("Handling reply for message:", message.id)
-    onReply(message)
-  }
-
-  const handleDelete = () => {
-    console.log("Handling delete for message:", message.id)
-    onDelete(message.id)
+    setShowReactions(false)
   }
 
   const handleEdit = () => {
-    if (onEdit && editText.trim() !== message.text && editText.trim() !== "") {
-      console.log("Handling edit for message:", message.id, "new text:", editText.trim())
+    if (onEdit && editText.trim() !== message.text) {
       onEdit(message.id, editText.trim())
     }
     setIsEditing(false)
   }
 
-  const handleStartEdit = () => {
-    console.log("Starting edit for message:", message.id)
-    setIsEditing(true)
-  }
-
-  const handleCancelEdit = () => {
-    console.log("Canceling edit for message:", message.id)
-    setIsEditing(false)
-    setEditText(message.text)
-  }
-
   const handleCopy = () => {
-    console.log("Handling copy for message:", message.id)
     if (onCopy) {
       onCopy(message.text)
     } else {
-      navigator.clipboard
-        .writeText(message.text)
-        .then(() => {
-          console.log("Text copied to clipboard")
-        })
-        .catch((err) => {
-          console.error("Failed to copy text: ", err)
-        })
+      navigator.clipboard.writeText(message.text)
     }
   }
 
@@ -120,18 +89,6 @@ export function MessageBubble({
   const isImage = message.file?.type.startsWith("image/")
   const isVideo = message.file?.type.startsWith("video/")
   const isAudio = message.file?.type.startsWith("audio/")
-
-  const isSystemMessage = message.type === "system" || message.sender === "System"
-
-  if (isSystemMessage) {
-    return (
-      <div className="flex justify-center mb-4 w-full">
-        <div className="bg-slate-800/80 text-gray-400 text-xs px-4 py-1.5 rounded-full border border-slate-700/50 shadow-sm backdrop-blur-sm text-center max-w-[80%]">
-          {message.text}
-        </div>
-      </div>
-    )
-  }
 
   const renderFilePreview = () => {
     if (!message.file) return null
@@ -200,6 +157,8 @@ export function MessageBubble({
   return (
     <div className={`flex ${isOwnMessage ? "justify-end" : "justify-start"} mb-4`}>
       <div className={`max-w-md ${isOwnMessage ? "order-2" : "order-1"}`}>
+        {/* User info (avatar + name) - only show for others' messages */}
+
         {/* Reply indicator */}
         {message.replyTo && (
           <div className="mb-2 px-3 py-2 bg-slate-700/50 rounded-lg border-l-2 border-cyan-400">
@@ -214,23 +173,24 @@ export function MessageBubble({
           style={{
             backgroundColor: isOwnMessage ? "#0891b2" : userColor,
           }}
+          onMouseEnter={() => setShowReactions(true)}
+          onMouseLeave={() => setShowReactions(false)}
         >
           {/* User info inside message bubble */}
           <div className="flex items-center gap-2 mb-2">
             <div className="w-6 h-6 rounded-full border border-slate-600 flex items-center justify-center bg-slate-700 overflow-hidden flex-shrink-0">
-              {userAvatar ? (
+              {(isOwnMessage ? userAvatar : userAvatar) ? (
                 <img
-                  src={userAvatar || "/placeholder.svg"}
+                  src={(isOwnMessage ? userAvatar : userAvatar) || "/placeholder.svg"}
                   alt={message.sender}
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     e.currentTarget.style.display = "none"
-                    const nextEl = e.currentTarget.nextElementSibling as HTMLElement
-                    if (nextEl) nextEl.classList.remove("hidden")
+                    e.currentTarget.nextElementSibling?.classList.remove("hidden")
                   }}
                 />
               ) : null}
-              <User className={`w-3 h-3 text-gray-300 ${userAvatar ? "hidden" : ""}`} />
+              <User className={`w-3 h-3 text-gray-300 ${(isOwnMessage ? userAvatar : userAvatar) ? "hidden" : ""}`} />
             </div>
             <span className="text-xs font-medium text-gray-200 opacity-90">{message.sender}</span>
           </div>
@@ -241,28 +201,22 @@ export function MessageBubble({
               <textarea
                 value={editText}
                 onChange={(e) => setEditText(e.target.value)}
-                className="w-full bg-slate-700 text-white rounded p-2 text-sm resize-none border border-slate-600 focus:border-slate-500"
+                className="w-full bg-slate-700 text-white rounded p-2 text-sm resize-none"
                 rows={3}
                 autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault()
-                    handleEdit()
-                  }
-                  if (e.key === "Escape") {
-                    handleCancelEdit()
-                  }
-                }}
               />
               <div className="flex gap-2">
-                <Button size="sm" onClick={handleEdit} className="bg-green-500 hover:bg-green-600 text-xs px-3 py-1">
+                <Button size="sm" onClick={handleEdit} className="bg-green-500 hover:bg-green-600 text-xs">
                   Save
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={handleCancelEdit}
-                  className="text-xs px-3 py-1 border-slate-600 text-slate-300 hover:bg-slate-700 bg-transparent"
+                  onClick={() => {
+                    setIsEditing(false)
+                    setEditText(message.text)
+                  }}
+                  className="text-xs"
                 >
                   Cancel
                 </Button>
@@ -288,153 +242,100 @@ export function MessageBubble({
               {message.edited && <span className="text-xs opacity-50">(edited)</span>}
             </div>
 
-            {!isEditing && (
-              <div className="flex items-center gap-1">
-                {/* Quick reaction buttons */}
+            {/* Message options menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-slate-700/50 hover:text-red-400"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    handleReaction("heart")
-                  }}
-                  title="Heart"
+                  className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity"
                 >
-                  <Heart className={`w-3 h-3 ${hasUserHearted ? "fill-red-400 text-red-400" : "text-red-400"}`} />
+                  <MoreVertical className="w-3 h-3" />
                 </Button>
-
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-slate-700/50 hover:text-blue-400"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    handleReaction("thumbsUp")
-                  }}
-                  title="Thumbs Up"
-                >
-                  <ThumbsUp
-                    className={`w-3 h-3 ${hasUserThumbsUp ? "fill-blue-400 text-blue-400" : "text-blue-400"}`}
-                  />
-                </Button>
-
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-slate-700/50"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    handleReply()
-                  }}
-                  title="Reply"
-                >
-                  <Reply className="w-3 h-3 text-gray-400" />
-                </Button>
-
-                {/* Message options menu */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-slate-700/50"
-                    >
-                      <MoreVertical className="w-3 h-3" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="end"
-                    className="bg-slate-800 border-slate-700 text-white min-w-[120px]"
-                    style={{ zIndex: 50 }}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-slate-800 border-slate-700 text-white">
+                <DropdownMenuItem onClick={() => onReply(message)} className="hover:bg-slate-700 cursor-pointer">
+                  <Reply className="w-4 h-4 mr-2" />
+                  Reply
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleCopy} className="hover:bg-slate-700 cursor-pointer">
+                  <Copy className="w-4 h-4 mr-2" />
+                  Copy
+                </DropdownMenuItem>
+                {isOwnMessage && onEdit && (
+                  <DropdownMenuItem onClick={() => setIsEditing(true)} className="hover:bg-slate-700 cursor-pointer">
+                    <Edit className="w-4 h-4 mr-2" />
+                    Edit
+                  </DropdownMenuItem>
+                )}
+                {isOwnMessage && (
+                  <DropdownMenuItem
+                    onClick={() => onDelete(message.id)}
+                    className="hover:bg-slate-700 cursor-pointer text-red-400"
                   >
-                    <DropdownMenuItem
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        handleCopy()
-                      }}
-                      className="hover:bg-slate-700 cursor-pointer focus:bg-slate-700 flex items-center gap-2"
-                    >
-                      <Copy className="w-4 h-4" />
-                      Copy
-                    </DropdownMenuItem>
-                    {isOwnMessage && onEdit && (
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          handleStartEdit()
-                        }}
-                        className="hover:bg-slate-700 cursor-pointer focus:bg-slate-700 flex items-center gap-2"
-                      >
-                        <Edit className="w-4 h-4" />
-                        Edit
-                      </DropdownMenuItem>
-                    )}
-                    {isOwnMessage && (
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          handleDelete()
-                        }}
-                        className="hover:bg-slate-700 cursor-pointer text-red-400 focus:bg-slate-700 focus:text-red-400 flex items-center gap-2"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        Delete
-                      </DropdownMenuItem>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            )}
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
+
+          {/* Reaction buttons (show on hover) */}
+          {showReactions && !isEditing && (
+            <div className="absolute -top-8 right-0 flex gap-1 bg-slate-800 rounded-full p-1 shadow-lg border border-slate-600">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 hover:bg-slate-700"
+                onClick={() => handleReaction("heart")}
+              >
+                <Heart className="w-3 h-3 text-red-400" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 hover:bg-slate-700"
+                onClick={() => handleReaction("thumbsUp")}
+              >
+                <ThumbsUp className="w-3 h-3 text-blue-400" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 hover:bg-slate-700"
+                onClick={() => onReply(message)}
+              >
+                <Reply className="w-3 h-3 text-gray-400" />
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Reaction counts */}
-        {(heartCount > 0 || thumbsUpCount > 0) && !isEditing && (
+        {(heartCount > 0 || thumbsUpCount > 0) && (
           <div className="flex gap-2 mt-1 text-xs">
             {heartCount > 0 && (
-              <button
-                className={`flex items-center gap-1 px-2 py-1 rounded-full cursor-pointer transition-colors border-0 bg-transparent ${
-                  hasUserHearted
-                    ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                    : "bg-slate-700/50 text-gray-400 hover:bg-slate-600/50"
+              <div
+                className={`flex items-center gap-1 px-2 py-1 rounded-full cursor-pointer ${
+                  hasUserHearted ? "bg-red-500/20 text-red-400" : "bg-slate-700/50 text-gray-400"
                 }`}
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  handleReaction("heart")
-                }}
-                type="button"
-                title={`${heartCount} heart${heartCount !== 1 ? "s" : ""}`}
+                onClick={() => handleReaction("heart")}
               >
-                <Heart className={`w-3 h-3 ${hasUserHearted ? "fill-current" : ""}`} />
+                <Heart className="w-3 h-3" />
                 <span>{heartCount}</span>
-              </button>
+              </div>
             )}
             {thumbsUpCount > 0 && (
-              <button
-                className={`flex items-center gap-1 px-2 py-1 rounded-full cursor-pointer transition-colors border-0 bg-transparent ${
-                  hasUserThumbsUp
-                    ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
-                    : "bg-slate-700/50 text-gray-400 hover:bg-slate-600/50"
+              <div
+                className={`flex items-center gap-1 px-2 py-1 rounded-full cursor-pointer ${
+                  hasUserThumbsUp ? "bg-blue-500/20 text-blue-400" : "bg-slate-700/50 text-gray-400"
                 }`}
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  handleReaction("thumbsUp")
-                }}
-                type="button"
-                title={`${thumbsUpCount} thumbs up`}
+                onClick={() => handleReaction("thumbsUp")}
               >
-                <ThumbsUp className={`w-3 h-3 ${hasUserThumbsUp ? "fill-current" : ""}`} />
+                <ThumbsUp className="w-3 h-3" />
                 <span>{thumbsUpCount}</span>
-              </button>
+              </div>
             )}
           </div>
         )}

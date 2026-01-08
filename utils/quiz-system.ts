@@ -23,7 +23,6 @@ export interface QuizSession {
   totalQuestions: number
   createdAt: number
   participants: string[]
-  questionStartTime?: number
 }
 
 export interface QuizAnswer {
@@ -66,23 +65,20 @@ export class QuizSystem {
     // Generate questions
     const questions = await this.generateQuestions(topic)
 
-    // Build the session object *without* undefined properties
     const session: QuizSession = {
       id: sessionId,
       roomId,
       hostId,
       hostName,
+      topic,
       questions,
       currentQuestionIndex: 0,
       status: "waiting",
-      timePerQuestion: 10,
+      timePerQuestion: 10, // 10 seconds per question
       totalQuestions: 10,
       createdAt: Date.now(),
       participants: [hostId],
-      questionStartTime: Date.now(),
-      // Only include topic if it was provided
-      ...(topic ? { topic } : {}),
-    } as QuizSession
+    }
 
     const sessionRef = ref(database, `rooms/${roomId}/quiz/${sessionId}`)
     await set(sessionRef, session)
@@ -554,6 +550,18 @@ export class QuizSystem {
           category: "Music",
         },
         {
+          question: "Which genre of music did Elvis Presley help popularize?",
+          options: ["Jazz", "Blues", "Rock and Roll", "Country"],
+          correctAnswer: "Rock and Roll",
+          category: "Music",
+        },
+        {
+          question: "What is the highest female singing voice?",
+          options: ["Alto", "Mezzo-soprano", "Soprano", "Contralto"],
+          correctAnswer: "Soprano",
+          category: "Music",
+        },
+        {
           question: "Which instrument is Yo-Yo Ma famous for playing?",
           options: ["Violin", "Piano", "Cello", "Flute"],
           correctAnswer: "Cello",
@@ -789,22 +797,6 @@ export class QuizSystem {
     }
   }
 
-  // Remove participant from quiz session
-  async removeParticipant(roomId: string, sessionId: string, playerId: string): Promise<void> {
-    if (!database) return
-
-    const sessionRef = ref(database, `rooms/${roomId}/quiz/${sessionId}/participants`)
-    const participantsSnapshot = await new Promise<any>((resolve) => {
-      onValue(sessionRef, resolve, { onlyOnce: true })
-    })
-
-    const currentParticipants = participantsSnapshot.val() || []
-    if (currentParticipants.includes(playerId)) {
-      const updatedParticipants = currentParticipants.filter((id: string) => id !== playerId)
-      await set(sessionRef, updatedParticipants)
-    }
-  }
-
   // Submit answer
   async submitAnswer(
     roomId: string,
@@ -841,33 +833,19 @@ export class QuizSystem {
   }
 
   // Next question
-  async nextQuestion(roomId: string, sessionId: string): Promise<void> {
+  async nextQuestion(roomId: string, sessionId: string, currentIndex: number): Promise<void> {
     if (!database) return
 
-    const sessionRef = ref(database, `rooms/${roomId}/quiz/${sessionId}`)
-
-    // Get current session to check index
-    const snapshot = await new Promise<any>((resolve) => {
-      onValue(sessionRef, resolve, { onlyOnce: true })
-    })
-    const session = snapshot.val() as QuizSession
-
-    if (!session) return
-
-    const nextIndex = session.currentQuestionIndex + 1
-
-    if (nextIndex >= session.questions.length) {
-      await this.endQuiz(roomId, sessionId)
-    } else {
-      await set(ref(database, `rooms/${roomId}/quiz/${sessionId}/currentQuestionIndex`), nextIndex)
-      await set(ref(database, `rooms/${roomId}/quiz/${sessionId}/questionStartTime`), Date.now())
-    }
+    const indexRef = ref(database, `rooms/${roomId}/quiz/${sessionId}/currentQuestionIndex`)
+    await set(indexRef, currentIndex + 1)
   }
 
   // End quiz
   async endQuiz(roomId: string, sessionId: string): Promise<void> {
     if (!database) return
-    await set(ref(database, `rooms/${roomId}/quiz/${sessionId}/status`), "finished")
+
+    const statusRef = ref(database, `rooms/${roomId}/quiz/${sessionId}/status`)
+    await set(statusRef, "finished")
   }
 
   // Calculate results

@@ -1,12 +1,11 @@
 "use client"
 
 import type React from "react"
-import { Mic, MicOff, Phone, PhoneOff, Volume2, VolumeX, Minimize2, Maximize2 } from "lucide-react"
-import { CallSignaling, type CallData } from "@/utils/call-signaling"
-import { CallSounds } from "@/utils/call-sounds"
 
 import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
+import { Mic, MicOff, Phone, PhoneOff, Volume2, VolumeX, Minimize2, Maximize2 } from "lucide-react"
+import { CallSignaling, type CallData } from "@/utils/call-signaling"
 
 interface AudioCallModalProps {
   isOpen: boolean
@@ -34,113 +33,24 @@ export function AudioCallModal({
   const [isDragging, setIsDragging] = useState(false)
   const [position, setPosition] = useState({ x: 20, y: 20 })
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
-  const [connectionStatus, setConnectionStatus] = useState<string>("Connecting...")
-  const [isAnswering, setIsAnswering] = useState(false)
 
   const modalRef = useRef<HTMLDivElement>(null)
-  const localAudioRef = useRef<HTMLAudioElement>(null)
-  const remoteAudioRef = useRef<HTMLAudioElement>(null)
   const callTimerRef = useRef<NodeJS.Timeout>()
   const callSignaling = CallSignaling.getInstance()
 
-  const callDataRef = useRef<CallData | null>(null)
-  const roomIdRef = useRef<string>(roomId)
-
-  useEffect(() => {
-    callDataRef.current = callData
-    roomIdRef.current = roomId
-  }, [callData, roomId])
-
-  // Ensure cleanup on unmount (e.g. closing tab or navigating away)
-  useEffect(() => {
-    return () => {
-      const activeCall = callDataRef.current
-      if (activeCall && (activeCall.status === "answered" || activeCall.status === "ringing")) {
-        console.log("AudioCallModal unmounting with active call, cleaning up...")
-        CallSounds.getInstance().stopAll()
-        callSignaling.endCall(roomIdRef.current, activeCall.id).catch(console.error)
-      }
-    }
-  }, [])
-
   useEffect(() => {
     if (isOpen && callData?.status === "answered") {
-      // Stop any ringing sounds when call connects
-      CallSounds.getInstance().stopAll()
-
       callTimerRef.current = setInterval(() => {
         setCallDuration((prev) => prev + 1)
       }, 1000)
-    } else if (isOpen && !isIncoming && callData?.status === "ringing") {
-      // Play ringback tone for outgoing calls
-      CallSounds.getInstance().playRingback()
     }
 
     return () => {
       if (callTimerRef.current) {
         clearInterval(callTimerRef.current)
       }
-      // Ensure sounds stop if modal closes while ringing
-      if (callData?.status === "ringing") {
-        CallSounds.getInstance().stopAll()
-      }
     }
-  }, [isOpen, callData?.status, isIncoming])
-
-  // Handle media streams
-  useEffect(() => {
-    if (!callData || !isOpen) return
-
-    const setupMediaStreams = async () => {
-      try {
-        // Set up remote stream callback
-        callSignaling.setRemoteStreamCallback((callId: string, stream: MediaStream) => {
-          if (callId === callData.id && remoteAudioRef.current) {
-            console.log("Setting remote audio stream")
-            remoteAudioRef.current.srcObject = stream
-            remoteAudioRef.current.play().catch(console.error)
-            setConnectionStatus("Connected")
-          }
-        })
-
-        // Get local stream if call is answered
-        if (callData.status === "answered") {
-          const localStream = callSignaling.getLocalStream(callData.id)
-          if (localStream && localAudioRef.current) {
-            console.log("Setting local audio stream")
-            localAudioRef.current.srcObject = localStream
-            localAudioRef.current.muted = true // Always mute local audio to prevent feedback
-          }
-
-          const remoteStream = callSignaling.getRemoteStream(callData.id)
-          if (remoteStream && remoteAudioRef.current) {
-            console.log("Setting existing remote audio stream")
-            remoteAudioRef.current.srcObject = remoteStream
-            remoteAudioRef.current.play().catch(console.error)
-            setConnectionStatus("Connected")
-          }
-        }
-      } catch (error) {
-        console.error("Error setting up media streams:", error)
-        setConnectionStatus("Connection failed")
-      }
-    }
-
-    setupMediaStreams()
-  }, [callData, isOpen])
-
-  // Handle mute/unmute
-  useEffect(() => {
-    if (callData) {
-      const localStream = callSignaling.getLocalStream(callData.id)
-      if (localStream) {
-        const audioTrack = localStream.getAudioTracks()[0]
-        if (audioTrack) {
-          audioTrack.enabled = !isMuted
-        }
-      }
-    }
-  }, [isMuted, callData])
+  }, [isOpen, callData?.status])
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -149,28 +59,16 @@ export function AudioCallModal({
   }
 
   const handleEndCall = async () => {
-    // Play end call sound
-    CallSounds.getInstance().playEndCall()
-
     if (callData) {
       await callSignaling.endCall(roomId, callData.id)
     }
     setCallDuration(0)
-    setConnectionStatus("Connecting...")
     onClose()
   }
 
   const handleAnswerCall = async () => {
-    if (callData && !isAnswering) {
-      try {
-        setIsAnswering(true)
-        setConnectionStatus("Connecting...")
-        await callSignaling.answerCall(roomId, callData.id, currentUserId)
-      } catch (error) {
-        console.error("Error answering call:", error)
-        setConnectionStatus("Connection failed")
-        setIsAnswering(false)
-      }
+    if (callData) {
+      await callSignaling.answerCall(roomId, callData.id, currentUserId)
     }
   }
 
@@ -259,12 +157,6 @@ export function AudioCallModal({
     }
   }, [isDragging])
 
-  useEffect(() => {
-    if (callData?.status === "answered") {
-      setIsAnswering(false)
-    }
-  }, [callData?.status])
-
   if (!isOpen) return null
 
   const otherParticipant = callData?.participants.find((p) => p !== currentUserId) || callData?.caller || "Unknown"
@@ -322,10 +214,6 @@ export function AudioCallModal({
         ref={modalRef}
         className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-md mx-auto"
       >
-        {/* Hidden audio elements */}
-        <audio ref={localAudioRef} autoPlay muted playsInline />
-        <audio ref={remoteAudioRef} autoPlay playsInline />
-
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
           <h2 className="text-white font-semibold">Audio Call</h2>
@@ -353,8 +241,8 @@ export function AudioCallModal({
                 ? "Incoming call..."
                 : "Calling..."
               : callData?.status === "answered"
-                ? `${formatDuration(callDuration)} • ${connectionStatus}`
-                : connectionStatus}
+                ? formatDuration(callDuration)
+                : "Connecting..."}
           </p>
 
           {/* Incoming Call Actions */}
@@ -365,8 +253,7 @@ export function AudioCallModal({
               </Button>
               <Button
                 onClick={handleAnswerCall}
-                disabled={isAnswering}
-                className="bg-green-500 hover:bg-green-600 text-white rounded-full w-16 h-16 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="bg-green-500 hover:bg-green-600 text-white rounded-full w-16 h-16"
               >
                 <Phone className="w-6 h-6" />
               </Button>

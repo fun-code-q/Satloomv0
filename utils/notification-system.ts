@@ -1,14 +1,9 @@
 export class NotificationSystem {
   private static instance: NotificationSystem
-  private toasts: Array<{
-    id: string
-    message: string
-    type: "success" | "error" | "info" | "warning"
-    timestamp: number
-  }> = []
-
+  private audioContext: AudioContext | null = null
   private notificationsEnabled = true
   private soundEnabled = true
+  private permissionRequested = false
 
   static getInstance(): NotificationSystem {
     if (!NotificationSystem.instance) {
@@ -17,164 +12,179 @@ export class NotificationSystem {
     return NotificationSystem.instance
   }
 
-  // Enable / disable all browser notifications (toast + system)
-  public setNotificationsEnabled(enabled: boolean) {
+  constructor() {
+    this.initAudioContext()
+  }
+
+  private initAudioContext() {
+    try {
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    } catch (error) {
+      console.warn("Audio context not supported:", error)
+    }
+  }
+
+  setNotificationsEnabled(enabled: boolean) {
     this.notificationsEnabled = enabled
   }
 
-  // Enable / disable any future sound support (kept for API parity)
-  public setSoundEnabled(enabled: boolean) {
+  setSoundEnabled(enabled: boolean) {
     this.soundEnabled = enabled
   }
 
-  /** Ask the user for browser-notification permission (no-op on server) */
-  public async requestPermission() {
-    if (typeof window !== "undefined" && "Notification" in window) {
-      if (Notification.permission === "default") {
-        await Notification.requestPermission()
+  private async playTone(frequency: number, duration: number, volume = 0.3) {
+    if (!this.soundEnabled || !this.audioContext) return
+
+    try {
+      // Resume audio context if suspended
+      if (this.audioContext.state === "suspended") {
+        await this.audioContext.resume()
       }
+
+      const oscillator = this.audioContext.createOscillator()
+      const gainNode = this.audioContext.createGain()
+
+      oscillator.connect(gainNode)
+      gainNode.connect(this.audioContext.destination)
+
+      oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime)
+      oscillator.type = "sine"
+
+      gainNode.gain.setValueAtTime(0, this.audioContext.currentTime)
+      gainNode.gain.linearRampToValueAtTime(volume, this.audioContext.currentTime + 0.01)
+      gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + duration)
+
+      oscillator.start(this.audioContext.currentTime)
+      oscillator.stop(this.audioContext.currentTime + duration)
+    } catch (error) {
+      console.warn("Error playing tone:", error)
     }
   }
 
-  private showToast(message: string, type: "success" | "error" | "info" | "warning") {
-    const toast = {
-      id: `toast_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      message,
-      type,
-      timestamp: Date.now(),
-    }
+  private showNotification(title: string, body: string, icon?: string) {
+    if (!this.notificationsEnabled) return
 
-    this.toasts.push(toast)
+    try {
+      if ("Notification" in window && Notification.permission === "granted") {
+        const notification = new Notification(title, {
+          body,
+          icon: icon || "/favicon.ico",
+          badge: "/favicon.ico",
+          tag: "satloom-notification",
+          requireInteraction: false,
+        })
 
-    // Auto remove after 5 seconds
-    setTimeout(() => {
-      this.toasts = this.toasts.filter((t) => t.id !== toast.id)
-    }, 5000)
-
-    // Show browser notification if supported
-    if (this.notificationsEnabled && "Notification" in window && Notification.permission === "granted") {
-      new Notification(`Satloom - ${type.charAt(0).toUpperCase() + type.slice(1)}`, {
-        body: message,
-        icon: "/placeholder-logo.png",
-      })
-    }
-
-    console.log(`📢 ${type.toUpperCase()}: ${message}`)
-  }
-
-  success(message: string) {
-    this.showToast(message, "success")
-  }
-
-  error(message: string) {
-    this.showToast(message, "error")
-  }
-
-  info(message: string) {
-    this.showToast(message, "info")
-  }
-
-  warning(message: string) {
-    this.showToast(message, "warning")
-  }
-
-  // Game-specific notifications
-  gameInviteReceived(fromUser: string, gameType: string) {
-    this.info(`${fromUser} invited you to play ${gameType}`)
-  }
-
-  gameInviteSent(toUser: string, gameType: string) {
-    this.success(`Game invite sent to ${toUser}`)
-  }
-
-  gameStarted(gameType: string) {
-    this.success(`${gameType} game started!`)
-  }
-
-  gameEnded(winner?: string) {
-    if (winner) {
-      this.info(`Game ended - ${winner} wins!`)
-    } else {
-      this.info("Game ended")
+        // Auto-close after 5 seconds
+        setTimeout(() => {
+          notification.close()
+        }, 5000)
+      }
+    } catch (error) {
+      console.warn("Error showing notification:", error)
     }
   }
 
-  playerJoined(playerName: string) {
-    this.info(`${playerName} joined the game`)
+  async requestPermission() {
+    if (!("Notification" in window)) {
+      console.warn("This browser does not support notifications")
+      return false
+    }
+
+    if (this.permissionRequested) return Notification.permission === "granted"
+
+    this.permissionRequested = true
+
+    try {
+      const permission = await Notification.requestPermission()
+      return permission === "granted"
+    } catch (error) {
+      console.warn("Error requesting notification permission:", error)
+      return false
+    }
   }
 
-  playerLeft(playerName: string) {
-    this.warning(`${playerName} left the game`)
+  // Notification methods
+  async newMessage(sender: string, message: string) {
+    await this.playTone(800, 0.2)
+    this.showNotification("New Message", `${sender}: ${message.substring(0, 50)}${message.length > 50 ? "..." : ""}`)
   }
 
-  connectionLost() {
-    this.error("Connection lost - playing in offline mode")
+  async roomCreated(roomId: string) {
+    await this.playTone(600, 0.3)
+    await this.playTone(800, 0.3)
+    this.showNotification("Room Created", `Room ${roomId} has been created`)
   }
 
-  connectionRestored() {
-    this.success("Connection restored")
+  async roomJoined(roomId: string) {
+    await this.playTone(500, 0.2)
+    await this.playTone(700, 0.2)
+    this.showNotification("Room Joined", `You joined room ${roomId}`)
   }
 
-  // Room notifications
-  roomCreated(roomId: string) {
-    this.success(`Room created: ${roomId}`)
+  async roomLeft(roomId: string) {
+    await this.playTone(400, 0.4)
+    this.showNotification("Room Left", `You left room ${roomId}`)
   }
 
-  roomJoined(roomId: string) {
-    this.success(`Joined room: ${roomId}`)
+  async incomingCall(caller: string) {
+    // Play ringing sound - enhanced for better audio
+    const playRingTone = async () => {
+      await this.playTone(800, 0.5, 0.4)
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      await this.playTone(600, 0.5, 0.4)
+    }
+
+    await playRingTone()
+    this.showNotification("Incoming Call", `${caller} is calling you`)
   }
 
-  // Call notifications
-  incomingCall(fromUser: string) {
-    this.info(`Incoming call from ${fromUser}`)
+  async incomingVideoCall(caller: string) {
+    // Play video call sound (different pattern from audio call)
+    const playVideoRingTone = async () => {
+      await this.playTone(1000, 0.3, 0.4)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      await this.playTone(800, 0.3, 0.4)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      await this.playTone(1200, 0.3, 0.4)
+    }
+
+    await playVideoRingTone()
+    this.showNotification("Incoming Video Call", `${caller} wants to video call`)
   }
 
-  incomingVideoCall(fromUser: string) {
-    this.info(`Incoming video call from ${fromUser}`)
+  async theaterInvite(host: string, videoTitle: string) {
+    await this.playTone(600, 0.4)
+    await this.playTone(900, 0.4)
+    this.showNotification("Theater Invite", `${host} invited you to watch ${videoTitle}`)
   }
 
-  callStarted() {
-    this.success("Call started")
+  async gameInvite(host: string, gameType: string) {
+    await this.playTone(700, 0.3)
+    await this.playTone(1000, 0.3)
+    this.showNotification("Game Invite", `${host} invited you to play ${gameType}`)
   }
 
-  callEnded() {
-    this.info("Call ended")
+  async callConnected() {
+    await this.playTone(1000, 0.2)
+    await this.playTone(1200, 0.2)
   }
 
-  // Theater notifications
-  theaterInviteReceived(fromUser: string) {
-    this.info(`${fromUser} invited you to watch together`)
+  async callEnded() {
+    await this.playTone(400, 0.6)
   }
 
-  theaterInvite(host: string, videoTitle: string) {
-    this.info(`${host} invited you to watch ${videoTitle}`)
+  async callNotAnswered() {
+    await this.playTone(300, 1.0)
+    this.showNotification("Call Missed", "Call was not answered")
   }
 
-  theaterStarted() {
-    this.success("Watch party started!")
+  async error(message: string) {
+    await this.playTone(200, 0.8)
+    this.showNotification("Error", message)
   }
 
-  // Quiz notifications
-  quizStarted() {
-    this.success("Quiz started!")
-  }
-
-  quizEnded() {
-    this.info("Quiz completed")
-  }
-
-  // Get current toasts for UI display
-  getToasts() {
-    return [...this.toasts]
-  }
-
-  // Clear all toasts
-  clearAll() {
-    this.toasts = []
-  }
-
-  // Remove specific toast
-  removeToast(id: string) {
-    this.toasts = this.toasts.filter((t) => t.id !== id)
+  async success(message: string) {
+    await this.playTone(1200, 0.3)
+    this.showNotification("Success", message)
   }
 }
